@@ -116,8 +116,9 @@ def try_unlock(pin: str) -> bool:
     return False
 
 
-def issue_session(response) -> None:
+def issue_session(response, request: Request | None = None) -> None:
     token = get_serializer().dumps({"v": 1})
+    secure = bool(request is not None and request.url.scheme == "https")
     response.set_cookie(
         "closet_session",
         token,
@@ -125,6 +126,7 @@ def issue_session(response) -> None:
         httponly=True,
         samesite="lax",
         path="/",
+        secure=secure,
     )
 
 

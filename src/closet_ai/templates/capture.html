@@ -143,10 +143,18 @@
       why = "Camera not available.";
     }
     webcamHint.hidden = false;
+    const httpsPort = location.port || "8420";
+    const lanHost =
+      location.hostname === "localhost" || location.hostname === "127.0.0.1"
+        ? "this computer"
+        : location.hostname;
     webcamHint.textContent =
-      why + " Use 📷 Photo to pick a file instead, or open this app as http://localhost:" +
-      (location.port || "8420") +
-      " on this machine for the webcam.";
+      why +
+      " Use 📷 Photo to pick a file, or open https://" +
+      lanHost +
+      ":" +
+      httpsPort +
+      "/capture (accept the certificate warning once) so the browser allows the camera.";
   }
 
   setWebcamEnabled(canUseWebcam);
@@ -187,9 +195,11 @@
     if (!canUseWebcam) {
       setWebcamEnabled(false);
       showError(
-        "Webcam is blocked on this address. Use 📷 Photo, or open http://localhost:" +
+        "Webcam needs HTTPS on this address. Open https://" +
+          location.hostname +
+          ":" +
           (location.port || "8420") +
-          " for live camera."
+          "/capture and accept the certificate warning, or use 📷 Photo."
       );
       return;
     }

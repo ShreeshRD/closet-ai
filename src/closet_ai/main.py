@@ -8,7 +8,15 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from closet_ai import auth
-from closet_ai.config import HOST, PORT, ensure_dirs, static_dir
+from closet_ai.config import (
+    HOST,
+    PORT,
+    SSL_CERT_FILE,
+    SSL_ENABLED,
+    SSL_KEY_FILE,
+    ensure_dirs,
+    static_dir,
+)
 from closet_ai.db import init_db
 from closet_ai.routes import auth_routes, capture, items
 
@@ -51,7 +59,18 @@ def run() -> None:
 
     ensure_dirs()
     init_db()
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    kwargs: dict = {"host": HOST, "port": PORT, "log_level": "info"}
+    if SSL_ENABLED:
+        # Secure context → getUserMedia works from phone/laptop on LAN
+        kwargs["ssl_certfile"] = str(SSL_CERT_FILE)
+        kwargs["ssl_keyfile"] = str(SSL_KEY_FILE)
+        print(f"HTTPS on https://{HOST}:{PORT} (self-signed — accept browser warning once)")
+    else:
+        print(
+            f"HTTP on http://{HOST}:{PORT} — camera blocked on LAN; "
+            "generate certs in data/certs/ for HTTPS"
+        )
+    uvicorn.run(app, **kwargs)
 
 
 if __name__ == "__main__":
