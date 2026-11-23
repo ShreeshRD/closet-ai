@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from closet_ai import auth
 from closet_ai.config import HOST, PORT, ensure_dirs, static_dir
 from closet_ai.db import init_db
-from closet_ai.routes import auth_routes, items
+from closet_ai.routes import auth_routes, capture, items
 
 
 @asynccontextmanager
@@ -24,6 +24,7 @@ app = FastAPI(title="Closet AI", lifespan=lifespan, docs_url=None, redoc_url=Non
 app.mount("/static", StaticFiles(directory=str(static_dir())), name="static")
 app.include_router(auth_routes.router)
 app.include_router(items.router)
+app.include_router(capture.router)
 
 
 @app.middleware("http")

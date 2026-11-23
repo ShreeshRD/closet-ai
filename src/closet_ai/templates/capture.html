@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Capture · Closet AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="row-between">
+    <h1>Capture</h1>
+    <a class="btn ghost" href="/">← Wardrobe</a>
+  </div>
+  <p class="muted">Hold one garment up. Photo stays on this machine.</p>
+</section>
+
+<div class="capture-grid">
+  <section class="card capture-card">
+    <h2>1 · Photo</h2>
+
+    <div class="capture-modes">
+      <label class="btn mode-btn">
+        📷 Camera
+        <input type="file" id="file-input" accept="image/*" capture="environment" hidden />
+      </label>
+      <button type="button" class="btn ghost" id="webcam-toggle" hidden>Use webcam</button>
+    </div>
+
+    <div class="preview-wrap">
+      <img id="preview" alt="" hidden />
+      <video id="webcam" playsinline hidden></video>
+      <div class="preview-empty muted" id="preview-empty">No photo yet</div>
+    </div>
+
+    <div class="row-between capture-actions">
+      <button type="button" class="btn" id="shoot-btn" hidden>Shoot</button>
+      <button type="button" class="btn primary-block" id="analyze-btn" disabled>Analyze</button>
+    </div>
+    <p class="error" id="capture-error" hidden></p>
+  </section>
+
+  <section class="card capture-card" id="result-card" hidden>
+    <h2>2 · Confirm</h2>
+
+    <div id="match-block" hidden>
+      <p class="muted small">Looks familiar — same as an item you already have?</p>
+      <ul class="chip-list" id="match-list"></ul>
+      <button type="button" class="btn ghost" id="new-anyway">None of these — new item</button>
+    </div>
+
+    <form id="confirm-form" hidden>
+      <input type="hidden" id="f-token" />
+      <div class="form-row">
+        <div>
+          <label for="f-type">Type</label>
+          <select id="f-type" name="type" required>
+            {% for t in item_types %}
+            <option value="{{ t }}">{{ t.replace('_',' ') }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="f-qty">Qty</label>
+          <input id="f-qty" name="quantity" type="number" min="1" max="99" value="1" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="f-color">Color <span class="optional">auto</span></label>
+          <input id="f-color" name="color" maxlength="40" />
+        </div>
+        <div>
+          <label for="f-name">Name <span class="optional">optional</span></label>
+          <input id="f-name" name="name" maxlength="80" placeholder="auto from color + type" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="f-pattern">Pattern</label>
+          <select id="f-pattern" name="pattern">
+            {% for p in patterns %}
+            <option value="{{ p }}">{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="f-sleeve">Sleeve</label>
+          <select id="f-sleeve" name="sleeve">
+            {% for s in sleeves %}
+            <option value="{{ s }}">{{ s.replace('_',' ') }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="primary">Add to wardrobe</button>
+    </form>
+  </section>
+</div>
+
+<script>
+(function () {
+  const fileInput = document.getElementById("file-input");
+  const preview = document.getElementById("preview");
+  const video = document.getElementById("webcam");
+  const previewEmpty = document.getElementById("preview-empty");
+  const analyzeBtn = document.getElementById("analyze-btn");
+  const shootBtn = document.getElementById("shoot-btn");
+  const webcamToggle = document.getElementById("webcam-toggle");
+  const errEl = document.getElementById("capture-error");
+  const resultCard = document.getElementById("result-card");
+  const matchBlock = document.getElementById("match-block");
+  const matchList = document.getElementById("match-list");
+  const confirmForm = document.getElementById("confirm-form");
+  const tokenInput = document.getElementById("f-token");
+
+  let blob = null;
+  let stream = null;
+  let token = null;
+
+  // Show webcam control only where getUserMedia is allowed (secure context / localhost)
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
+      (window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    webcamToggle.hidden = false;
+  }
+
+  function showError(msg) {
+    errEl.hidden = !msg;
+    errEl.textContent = msg || "";
+  }
+
+  function showPreviewImage(dataUrl) {
+    stopWebcam();
+    preview.src = dataUrl;
+    preview.hidden = false;
+    previewEmpty.hidden = true;
+    analyzeBtn.disabled = false;
+    shootBtn.hidden = true;
+  }
+
+  function stopWebcam() {
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+    video.hidden = true;
+  }
+
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    showError("");
+    const url = URL.createObjectURL(f);
+    showPreviewImage(url);
+    blob = f;
+  });
+
+  webcamToggle.addEventListener("click", async () => {
+    showError("");
+    try {
+      stopWebcam();
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      video.hidden = false;
+      preview.hidden = true;
+      previewEmpty.hidden = true;
+      shootBtn.hidden = false;
+      analyzeBtn.disabled = true;
+      await video.play();
+    } catch (e) {
+      showError("Camera unavailable — use the file picker instead. (" + e.message + ")");
+    }
+  });
+
+  shootBtn.addEventListener("click", () => {
+    if (!video.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext("2d").drawImage(video, 0, 0);
+    c.toBlob((b) => {
+      if (!b) return;
+      blob = b;
+      showPreviewImage(c.toDataURL("image/jpeg", 0.92));
+    }, "image/jpeg", 0.92);
+  });
+
+  analyzeBtn.addEventListener("click", async () => {
+    if (!blob) return;
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = "Analyzing…";
+    showError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", blob, "capture.jpg");
+      const res = await fetch("/api/capture", { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      renderResult(body);
+    } catch (e) {
+      showError(e.message || "Upload failed");
+      analyzeBtn.disabled = false;
+    } finally {
+      analyzeBtn.textContent = "Analyze";
+    }
+  });
+
+  function renderResult(body) {
+    token = body.token;
+    tokenInput.value = token;
+    resultCard.hidden = false;
+
+    if (body.matches && body.matches.length) {
+      matchBlock.hidden = false;
+      matchList.innerHTML = "";
+      body.matches.forEach((m) => {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip due-chip";
+        btn.textContent = m.display_name + " · " + Math.round(m.score * 100) + "%";
+        btn.addEventListener("click", () => sameAs(m.item_id));
+        li.appendChild(btn);
+        matchList.appendChild(li);
+      });
+      confirmForm.hidden = true;
+    } else {
+      showConfirmForm(body.prefill);
+    }
+
+    resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function showConfirmForm(prefill) {
+    matchBlock.hidden = true;
+    confirmForm.hidden = false;
+    if (prefill) {
+      document.getElementById("f-color").value = prefill.color || "";
+      document.getElementById("f-type").value = prefill.type || "tshirt";
+      document.getElementById("f-pattern").value = prefill.pattern || "solid";
+      document.getElementById("f-sleeve").value = prefill.sleeve || "short";
+      document.getElementById("f-qty").value = prefill.quantity || 1;
+      document.getElementById("f-name").value = prefill.name || "";
+    }
+  }
+
+  document.getElementById("new-anyway").addEventListener("click", () => {
+    showConfirmForm(null);
+  });
+
+  async function sameAs(itemId) {
+    showError("");
+    try {
+      const fd = new FormData();
+      fd.append("token", token);
+      fd.append("item_id", String(itemId));
+      const res = await fetch("/api/capture/same-as", { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      window.location.href = "/items/" + itemId;
+    } catch (e) {
+      showError(e.message || "Failed");
+    }
+  }
+
+  confirmForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    showError("");
+    const payload = {
+      token: token,
+      type: document.getElementById("f-type").value,
+      color: document.getElementById("f-color").value,
+      name: document.getElementById("f-name").value,
+      pattern: document.getElementById("f-pattern").value,
+      sleeve: document.getElementById("f-sleeve").value,
+      quantity: Number(document.getElementById("f-qty").value) || 1,
+    };
+    try {
+      const res = await fetch("/api/capture/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      window.location.href = body.redirect || "/";
+    } catch (err) {
+      showError(err.message || "Could not save");
+    }
+  });
+})();
+</script>
+{% endblock %}
