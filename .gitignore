@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local data (DB, images, backups)
+data/
+models/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets / local env
+.env
+.pin
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
