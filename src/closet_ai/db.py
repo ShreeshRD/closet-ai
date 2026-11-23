@@ -129,40 +129,65 @@ def _type_supported(conn: sqlite3.Connection, type_name: str) -> bool:
 
 
 def _rebuild_items_for_types(conn: sqlite3.Connection) -> None:
-    """Recreate items so CHECK matches ITEM_TYPES (SQLite cannot ALTER a CHECK)."""
+    """Recreate items so CHECK matches ITEM_TYPES.
+
+    Uses SQLite's recommended replacement sequence (create items_new → copy →
+    drop items → rename items_new → items) so child foreign keys are not left
+    pointing at a renamed parent table. Fresh DBs never take this path.
+    """
     conn.execute("PRAGMA foreign_keys = OFF")
-    conn.execute("ALTER TABLE items RENAME TO items_old")
-    conn.execute(
-        f"""
-        CREATE TABLE items (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL DEFAULT '',
-          type TEXT NOT NULL CHECK (type IN (
+    try:
+        conn.execute("DROP TABLE IF EXISTS items_new")
+        conn.execute(
+            f"""
+            CREATE TABLE items_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL DEFAULT '',
+              type TEXT NOT NULL CHECK (type IN (
 {_TYPE_CHECK}
-          )),
-          color TEXT NOT NULL DEFAULT '',
-          pattern TEXT NOT NULL DEFAULT 'solid',
-          sleeve TEXT NOT NULL DEFAULT 'unknown',
-          quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
-          state TEXT NOT NULL DEFAULT 'available' CHECK (state IN ('available','due')),
-          wears_since_wash INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL,
-          primary_photo_path TEXT
+              )),
+              color TEXT NOT NULL DEFAULT '',
+              pattern TEXT NOT NULL DEFAULT 'solid',
+              sleeve TEXT NOT NULL DEFAULT 'unknown',
+              quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
+              state TEXT NOT NULL DEFAULT 'available' CHECK (state IN ('available','due')),
+              wears_since_wash INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,
+              primary_photo_path TEXT
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO items (id, name, type, color, pattern, sleeve, quantity,
-                           state, wears_since_wash, created_at, primary_photo_path)
-        SELECT id, name, type, color, pattern, sleeve, quantity,
-               state, wears_since_wash, created_at, primary_photo_path
-        FROM items_old
-        """
-    )
-    conn.execute("DROP TABLE items_old")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_items_state ON items(state)")
+        conn.execute(
+            """
+            INSERT INTO items_new (id, name, type, color, pattern, sleeve, quantity,
+                                   state, wears_since_wash, created_at, primary_photo_path)
+            SELECT id, name, type, color, pattern, sleeve, quantity,
+                   state, wears_since_wash, created_at, primary_photo_path
+            FROM items
+            """
+        )
+        conn.execute("DROP TABLE items")
+        conn.execute("ALTER TABLE items_new RENAME TO items")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_items_state ON items(state)")
+        # Verify child FKs still resolve (ratings/wear/wash/photos reference items.id)
+        for child, col in (
+            ("ratings", "item_id"),
+            ("wear_events", "item_id"),
+            ("wash_events", "item_id"),
+            ("item_photos", "item_id"),
+        ):
+            orphans = conn.execute(
+                f"SELECT COUNT(*) AS c FROM {child} "
+                f"LEFT JOIN items ON items.id = {child}.{col} "
+                f"WHERE {child}.{col} IS NOT NULL AND items.id IS NULL"
+            ).fetchone()["c"]
+            if orphans:
+                raise RuntimeError(
+                    f"migration would orphan {orphans} rows in {child}"
+                )
+        conn.execute("PRAGMA foreign_key_check")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def init_db() -> None:

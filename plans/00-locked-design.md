@@ -152,7 +152,7 @@ Cloud sync, multi-user, passive always-on camera, public internet, Docker (v1), 
 
 ```
 Phone browser ──┐
-               ├── HTTPS-less LAN ── PIN ── FastAPI
+               ├── LAN + local HTTPS ── PIN ── FastAPI
 Laptop browser ─┘                            │
                                              ├─ routes: auth, items, capture, log, due, settings
                                              ├─ services: detect, attributes, embed, wash_rules
@@ -160,6 +160,18 @@ Laptop browser ─┘                            │
                                              ├─ filesystem: images/, models/, data/backups/
                                              └─ YOLOv8n/s + attribute head (torch, CUDA if available)
 ```
+
+**Transport / phone capture (secure context):**
+
+Browsers only allow `getUserMedia` (live camera) in a **secure context** — `https://` or `http://localhost`. A phone opening `http://192.168.x.x:8420` is **not** a secure context, so live camera capture fails.
+
+v1 capture contract (offline LAN preserved):
+
+1. **Preferred for phone:** capture page uses `<input type="file" accept="image/*" capture="environment">` — file pickers do **not** require a secure context, so plain HTTP LAN is enough for stills.
+2. **Live webcam on laptop:** `getUserMedia` works on `http://localhost:8420` (same machine). For the laptop camera from another device over LAN, serve **locally trusted HTTPS** (e.g. `mkcert` certs for `192.168.*` and the hostname) and point the app at `https://…` — one-time phone trust of the local CA/root cert, still no internet dependency.
+3. API and HTML stay PIN-protected either way; stills upload over LAN only.
+
+Acceptance: cataloging works offline on LAN via phone file capture without any cloud service.
 
 **Suggested repo layout:**
 ```

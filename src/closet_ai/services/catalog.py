@@ -107,32 +107,37 @@ def delete_item(conn: sqlite3.Connection, item_id: int) -> bool:
 
 
 def refresh_item_state(conn: sqlite3.Connection, item_id: int) -> str | None:
-    """Recompute due status for one item; return reason if newly due."""
+    """Recompute due status for one item; return reason if newly due.
+
+    Latest/avg dirt consider only ratings at or after the most recent wash so a
+    washed item stays available until new post-wash dirt is recorded.
+    """
     item = get_item(conn, item_id)
     if not item:
         return None
 
-    last_rating = conn.execute(
-        "SELECT dirt, rated_at FROM ratings WHERE item_id = ? ORDER BY rated_at DESC, id DESC LIMIT 1",
-        (item_id,),
-    ).fetchone()
-    avg_row = conn.execute(
-        "SELECT AVG(dirt) AS a FROM ratings WHERE item_id = ? AND rated_at > COALESCE("
-        " (SELECT MAX(washed_at) FROM wash_events WHERE item_id = ?), '')",
-        (item_id, item_id),
-    ).fetchone()
     last_wash = conn.execute(
         "SELECT washed_at FROM wash_events WHERE item_id = ? ORDER BY washed_at DESC, id DESC LIMIT 1",
         (item_id,),
     ).fetchone()
+    last_washed_at = last_wash["washed_at"] if last_wash else None
 
-    # avg since wash: filter in Python if wash exists for reliability
-    if last_wash:
+    if last_washed_at:
+        last_rating = conn.execute(
+            "SELECT dirt, rated_at FROM ratings WHERE item_id = ? AND rated_at >= ? "
+            "ORDER BY rated_at DESC, id DESC LIMIT 1",
+            (item_id, last_washed_at),
+        ).fetchone()
         rows = conn.execute(
             "SELECT dirt FROM ratings WHERE item_id = ? AND rated_at >= ?",
-            (item_id, last_wash["washed_at"]),
+            (item_id, last_washed_at),
         ).fetchall()
     else:
+        last_rating = conn.execute(
+            "SELECT dirt, rated_at FROM ratings WHERE item_id = ? "
+            "ORDER BY rated_at DESC, id DESC LIMIT 1",
+            (item_id,),
+        ).fetchone()
         rows = conn.execute(
             "SELECT dirt FROM ratings WHERE item_id = ?", (item_id,)
         ).fetchall()
@@ -143,7 +148,7 @@ def refresh_item_state(conn: sqlite3.Connection, item_id: int) -> str | None:
         wears_since_wash=item["wears_since_wash"],
         latest_dirt=last_rating["dirt"] if last_rating else None,
         avg_dirt=avg_dirt,
-        last_washed_at=last_wash["washed_at"] if last_wash else None,
+        last_washed_at=last_washed_at,
         created_at=item["created_at"],
     )
     new_state = "due" if due else "available"

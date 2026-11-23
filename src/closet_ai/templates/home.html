@@ -36,25 +36,27 @@
   {% else %}
   <div class="tile-grid" id="tile-grid">
     {% for item in items %}
-    <div
+    <button
+      type="button"
       class="tile {{ 'tile-due' if item.state == 'due' }}"
       data-item-id="{{ item.id }}"
       data-payload='{{ {"id": item.id, "name": item.name, "display_name": item.display_name, "type": item.type, "color": item.color, "pattern": item.pattern, "sleeve": item.sleeve, "quantity": item.quantity, "state": item.state, "wears_since_wash": item.wears_since_wash, "created_at": item.created_at}|tojson }}'
-      title="Left-click: details · Right-click: menu"
+      aria-label="{{ item.display_name }}, {{ item.type.replace('_',' ') }}{% if item.state == 'due' %}, due for wash{% endif %}. Activate for details."
+      title="Activate: details · Right-click: menu"
     >
-      <div class="tile-photo swatch-fill" data-color="{{ item.color }}">
+      <span class="tile-photo swatch-fill" data-color="{{ item.color }}">
         <span class="tile-initial">{{ item.type[0]|upper if item.type else '?' }}</span>
         {% if item.primary_photo_path %}
         <img src="{{ item.primary_photo_path }}" alt="" />
         {% endif %}
-      </div>
-      <div class="tile-caption">
+      </span>
+      <span class="tile-caption">
         <span class="tile-name">{{ item.display_name }}</span>
         {% if item.quantity > 1 %}<span class="tile-qty">×{{ item.quantity }}</span>{% endif %}
         {% if item.state == 'due' %}<span class="tile-dot due" title="due"></span>
         {% else %}<span class="tile-wears">{{ item.wears_since_wash }}w</span>{% endif %}
-      </div>
-    </div>
+      </span>
+    </button>
     {% endfor %}
   </div>
   {% endif %}
@@ -62,7 +64,7 @@
 
 <!-- Left-click detail panel -->
 <div class="overlay" id="detail-overlay" hidden>
-  <div class="panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+  <div class="panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="panel-title" tabindex="-1" id="detail-panel">
     <button type="button" class="panel-close" id="panel-close" aria-label="Close">×</button>
     <div class="panel-photo swatch-fill" id="panel-photo">
       <span class="tile-initial" id="panel-initial"></span>
@@ -81,22 +83,34 @@
 </div>
 
 <!-- Right-click context menu -->
-<div class="ctx-menu" id="ctx-menu" hidden>
-  <button type="button" data-action="details">Details</button>
-  <button type="button" data-action="edit">Edit</button>
-  <button type="button" data-action="delete" class="danger">Delete</button>
+<div class="ctx-menu" id="ctx-menu" role="menu" hidden>
+  <button type="button" role="menuitem" data-action="details">Details</button>
+  <button type="button" role="menuitem" data-action="edit">Edit</button>
+  <button type="button" role="menuitem" data-action="delete" class="danger">Delete</button>
 </div>
 
 <script>
 (function () {
   const overlay = document.getElementById("detail-overlay");
+  const panel = document.getElementById("detail-panel");
   const panelClose = document.getElementById("panel-close");
   const ctx = document.getElementById("ctx-menu");
   let activeItem = null;
   let ctxItem = null;
+  let lastOpener = null;
+  let suppressNextClick = false;
 
-  function openDetail(item) {
+  function focusableIn(root) {
+    return Array.from(
+      root.querySelectorAll(
+        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => !el.hasAttribute("hidden") && el.offsetParent !== null);
+  }
+
+  function openDetail(item, opener) {
     activeItem = item;
+    lastOpener = opener || document.activeElement;
     const name = item.display_name || item.name || item.type;
     document.getElementById("panel-title").textContent = name;
     document.getElementById("panel-sub").textContent =
@@ -133,7 +147,7 @@
       const dt = document.createElement("dt");
       const dd = document.createElement("dd");
       dt.textContent = k;
-      dd.textContent = v;
+      dd.textContent = String(v);
       w.append(dt, dd);
       meta.appendChild(w);
     });
@@ -142,11 +156,17 @@
     document.getElementById("panel-delete-form").action =
       "/items/" + item.id + "/delete";
     overlay.hidden = false;
+    panel.focus();
   }
 
   function closeDetail() {
+    if (overlay.hidden) return;
     overlay.hidden = true;
     activeItem = null;
+    if (lastOpener && document.contains(lastOpener)) {
+      lastOpener.focus();
+    }
+    lastOpener = null;
   }
 
   function openCtx(item, x, y) {
@@ -156,6 +176,8 @@
     const h = ctx.offsetHeight;
     ctx.style.left = Math.min(x, window.innerWidth - w - 8) + "px";
     ctx.style.top = Math.min(y, window.innerHeight - h - 8) + "px";
+    const first = ctx.querySelector("button");
+    if (first) first.focus();
   }
 
   function closeCtx() {
@@ -164,11 +186,17 @@
   }
 
   document.getElementById("tile-grid")?.addEventListener("click", (e) => {
+    if (suppressNextClick) {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressNextClick = false;
+      return;
+    }
     const tile = e.target.closest(".tile");
     if (!tile) return;
     e.preventDefault();
     try {
-      openDetail(JSON.parse(tile.dataset.payload));
+      openDetail(JSON.parse(tile.dataset.payload), tile);
     } catch (_) {}
   });
 
@@ -181,17 +209,19 @@
     } catch (_) {}
   });
 
-  // Long-press → context menu (touch)
+  // Long-press → context menu (touch); consume following emulated click
   let pressTimer = null;
   let pressXY = null;
   const grid = document.getElementById("tile-grid");
   grid?.addEventListener("pointerdown", (e) => {
+    suppressNextClick = false;
     if (e.pointerType === "mouse") return;
     const tile = e.target.closest(".tile");
     if (!tile) return;
     pressXY = { x: e.clientX, y: e.clientY };
     pressTimer = setTimeout(() => {
       pressTimer = null;
+      suppressNextClick = true;
       try {
         openCtx(JSON.parse(tile.dataset.payload), pressXY.x, pressXY.y);
       } catch (_) {}
@@ -204,6 +234,7 @@
   grid?.addEventListener("pointercancel", () => {
     if (pressTimer) clearTimeout(pressTimer);
     pressTimer = null;
+    suppressNextClick = false;
   });
   grid?.addEventListener("pointermove", (e) => {
     if (!pressTimer || !pressXY) return;
@@ -219,13 +250,19 @@
       const tile = document.querySelector('.tile[data-item-id="' + id + '"]');
       if (tile) {
         try {
-          openDetail(JSON.parse(tile.dataset.payload));
+          openDetail(JSON.parse(tile.dataset.payload), el);
         } catch (_) {}
       }
     });
   });
 
   ctx.addEventListener("click", (e) => {
+    if (suppressNextClick) {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressNextClick = false;
+      return;
+    }
     const btn = e.target.closest("button[data-action]");
     if (!btn || !ctxItem) return;
     const action = btn.getAttribute("data-action");
@@ -250,11 +287,35 @@
   });
   document.addEventListener("click", (e) => {
     if (!ctx.hidden && !ctx.contains(e.target)) closeCtx();
+    if (suppressNextClick && !e.target.closest(".tile") && !e.target.closest("#ctx-menu")) {
+      suppressNextClick = false;
+    }
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeCtx();
       closeDetail();
+      return;
+    }
+    if (e.key === "Tab" && overlay && !overlay.hidden) {
+      const nodes = focusableIn(panel);
+      if (!nodes.length) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (!panel.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   });
 })();

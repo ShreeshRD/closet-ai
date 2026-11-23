@@ -1,6 +1,8 @@
 """Smoke tests for Phase 0 (no vision)."""
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -69,6 +71,21 @@ def test_create_list_item_api(client):
     assert listed[0]["name"] == "Grey crew tee"
 
 
+def test_api_requires_pin(client):
+    """Unauthenticated JSON API must 401 (no PIN bypass)."""
+    r_get = client.get("/api/items", follow_redirects=False)
+    assert r_get.status_code == 401
+    r_post = client.post("/api/items", json={"name": "x", "type": "tshirt"}, follow_redirects=False)
+    assert r_post.status_code == 401
+    r_one = client.get("/api/items/1", follow_redirects=False)
+    assert r_one.status_code == 401
+
+    client.post("/login", data={"pin": "7777"})
+    r_ok = client.get("/api/items")
+    assert r_ok.status_code == 200
+    assert r_ok.json() == []
+
+
 def test_invalid_type_rejected(client):
     client.post("/login", data={"pin": "4321"})
     r = client.post("/api/items", json={"name": "x", "type": "cape"})
@@ -135,7 +152,17 @@ def test_multiple_items_do_not_overwrite(client):
     assert home.status_code == 200
     for name in ("First tee", "Second tee", "Third jeans"):
         assert name in home.text
-        assert home.text.count(f'data-item-id') >= 1
-    # three distinct tiles
-    assert home.text.count('class="tile ') + home.text.count('class="tile"') + home.text.count('class="tile tile-due"') + home.text.count('class="tile ') >= 0
-    assert home.text.count('data-item-id=') >= 3
+
+    # Parse actual tile elements (buttons) and require three distinct item IDs
+    tile_ids = re.findall(
+        r'<button\b[^>]*class="tile[^"]*"[^>]*data-item-id="(\d+)"',
+        home.text,
+    )
+    # data-item-id may appear before class; try both attribute orders
+    if len(tile_ids) < 3:
+        tile_ids = re.findall(
+            r'<button\b[^>]*data-item-id="(\d+)"[^>]*class="tile',
+            home.text,
+        )
+    assert len(tile_ids) >= 3, f"expected ≥3 tiles, got {tile_ids}"
+    assert len(set(tile_ids)) >= 3, f"tile ids not distinct: {tile_ids}"

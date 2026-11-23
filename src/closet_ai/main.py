@@ -29,12 +29,13 @@ app.include_router(items.router)
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
     path = request.url.path
-    public = (
-        path.startswith("/static")
-        or path in ("/login", "/logout", "/healthz")
-        or path.startswith("/api/")  # Phase 0 LAN tests; tighten with PIN token later
-    )
+    public = path.startswith("/static") or path in ("/login", "/logout", "/healthz")
     if not public and not auth.session_valid(request):
+        # JSON API: 401 (not a redirect) so clients can distinguish auth failure
+        if path.startswith("/api/"):
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse({"detail": "PIN required"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
     return await call_next(request)
 

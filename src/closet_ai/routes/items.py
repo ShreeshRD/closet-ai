@@ -186,9 +186,16 @@ class ItemCreateJSON(BaseModel):
     quantity: int = Field(default=1, ge=1)
 
 
+def _refresh_all_states(conn) -> None:
+    """Recompute due for every item (day-boundary safe, not only HTML hits)."""
+    for row in conn.execute("SELECT id FROM items").fetchall():
+        catalog.refresh_item_state(conn, row["id"])
+
+
 @router.post("/api/items")
-async def create_item_api(body: ItemCreateJSON):
+async def create_item_api(body: ItemCreateJSON, request: Request):
     """JSON API for future capture flow / tests."""
+    require_session(request)
     try:
         with get_db() as conn:
             item = catalog.create_item(
@@ -200,20 +207,26 @@ async def create_item_api(body: ItemCreateJSON):
                 sleeve=body.sleeve,
                 quantity=body.quantity,
             )
+            catalog.refresh_item_state(conn, item["id"])
+            item = catalog.get_item(conn, item["id"])
     except ValueError as e:
         raise HTTPException(400, str(e))
     return item
 
 
 @router.get("/api/items")
-async def list_items_api(state: str | None = None, q: str | None = None):
+async def list_items_api(request: Request, state: str | None = None, q: str | None = None):
+    require_session(request)
     with get_db() as conn:
+        _refresh_all_states(conn)
         return catalog.list_items(conn, state=state, q=q)
 
 
 @router.get("/api/items/{item_id}")
-async def get_item_api(item_id: int):
+async def get_item_api(request: Request, item_id: int):
+    require_session(request)
     with get_db() as conn:
+        catalog.refresh_item_state(conn, item_id)
         item = catalog.get_item(conn, item_id)
     if not item:
         raise HTTPException(404, "Item not found")
