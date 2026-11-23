@@ -17,6 +17,9 @@
 
 * { box-sizing: border-box; }
 
+/* Must beat component display rules (.btn, etc.) so [hidden] always wins */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -691,6 +694,17 @@ button.linkish:hover { color: var(--text); text-decoration: underline; }
 }
 .capture-actions .primary-block:not(:disabled):hover {
   filter: brightness(1.05);
+}
+
+button#webcam-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: none;
+}
+#webcam-hint {
+  margin: -0.35rem 0 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 #confirm-form .primary {
