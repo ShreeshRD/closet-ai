@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block title %}Closet AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="row-between">
+    <h1>Wardrobe</h1>
+    <a class="btn" href="/items/new">+ Add</a>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="num">{{ stats.total }}</span><span class="lbl">items</span></div>
+    <div class="stat"><span class="num">{{ stats.available }}</span><span class="lbl">ready</span></div>
+    <div class="stat due"><span class="num">{{ stats.due }}</span><span class="lbl">wash</span></div>
+  </div>
+</section>
+
+{% if due %}
+<section class="card compact wash-strip">
+  <div class="row-between">
+    <h2>Wash list</h2>
+    <span class="tag due-tag">{{ due|length }}</span>
+  </div>
+  <ul class="chip-list">
+    {% for d in due %}
+    <li><button type="button" class="chip due-chip" data-open-item="{{ d.id }}">
+      <span class="swatch" data-color="{{ d.color }}"></span>
+      <span class="chip-name">{{ d.display_name }}</span>
+    </button></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="tile-section">
+  {% if not items %}
+    <p class="muted empty-tiles">No items yet. <a href="/items/new">Add your first garment</a>.</p>
+  {% else %}
+  <div class="tile-grid" id="tile-grid">
+    {% for item in items %}
+    <button
+      type="button"
+      class="tile {{ 'tile-due' if item.state == 'due' }}"
+      data-item-id="{{ item.id }}"
+      data-payload='{{ {"id": item.id, "name": item.name, "display_name": item.display_name, "type": item.type, "color": item.color, "pattern": item.pattern, "sleeve": item.sleeve, "quantity": item.quantity, "state": item.state, "wears_since_wash": item.wears_since_wash, "created_at": item.created_at}|tojson }}'
+      aria-label="{{ item.display_name }}, {{ item.type.replace('_',' ') }}{% if item.state == 'due' %}, due for wash{% endif %}. Activate for details."
+      title="Activate: details · Right-click: menu"
+    >
+      <span class="tile-photo swatch-fill" data-color="{{ item.color }}">
+        <span class="tile-initial">{{ item.type[0]|upper if item.type else '?' }}</span>
+        {% if item.primary_photo_path %}
+        <img src="{{ item.primary_photo_path }}" alt="" />
+        {% endif %}
+      </span>
+      <span class="tile-caption">
+        <span class="tile-name">{{ item.display_name }}</span>
+        {% if item.quantity > 1 %}<span class="tile-qty">×{{ item.quantity }}</span>{% endif %}
+        {% if item.state == 'due' %}<span class="tile-dot due" title="due"></span>
+        {% else %}<span class="tile-wears">{{ item.wears_since_wash }}w</span>{% endif %}
+      </span>
+    </button>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- Left-click detail panel -->
+<div class="overlay" id="detail-overlay" hidden>
+  <div class="panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="panel-title" tabindex="-1" id="detail-panel">
+    <button type="button" class="panel-close" id="panel-close" aria-label="Close">×</button>
+    <div class="panel-photo swatch-fill" id="panel-photo">
+      <span class="tile-initial" id="panel-initial"></span>
+    </div>
+    <h2 id="panel-title"></h2>
+    <p class="muted" id="panel-sub"></p>
+    <div class="panel-status" id="panel-status"></div>
+    <dl class="meta" id="panel-meta"></dl>
+    <div class="panel-actions">
+      <a class="btn" id="panel-edit" href="#">Edit</a>
+      <form method="post" id="panel-delete-form" class="inline">
+        <button type="submit" class="btn danger">Delete</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Right-click context menu -->
+<div class="ctx-menu" id="ctx-menu" role="menu" hidden>
+  <button type="button" role="menuitem" data-action="details">Details</button>
+  <button type="button" role="menuitem" data-action="edit">Edit</button>
+  <button type="button" role="menuitem" data-action="delete" class="danger">Delete</button>
+</div>
+
+<script>
+(function () {
+  const overlay = document.getElementById("detail-overlay");
+  const panel = document.getElementById("detail-panel");
+  const panelClose = document.getElementById("panel-close");
+  const ctx = document.getElementById("ctx-menu");
+  let activeItem = null;
+  let ctxItem = null;
+  let lastOpener = null;
+  let suppressNextClick = false;
+
+  function focusableIn(root) {
+    return Array.from(
+      root.querySelectorAll(
+        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => !el.hasAttribute("hidden") && el.offsetParent !== null);
+  }
+
+  function openDetail(item, opener) {
+    activeItem = item;
+    lastOpener = opener || document.activeElement;
+    const name = item.display_name || item.name || item.type;
+    document.getElementById("panel-title").textContent = name;
+    document.getElementById("panel-sub").textContent =
+      item.type.replace(/_/g, " ") + (item.color ? " · " + item.color : "");
+    document.getElementById("panel-initial").textContent =
+      (item.type || "?").charAt(0).toUpperCase();
+    const photo = document.getElementById("panel-photo");
+    photo.setAttribute("data-color", item.color || "");
+    photo.classList.toggle("due-frame", item.state === "due");
+
+    const status = document.getElementById("panel-status");
+    if (item.state === "due") {
+      status.className = "panel-status due";
+      status.textContent = "Due for wash";
+    } else {
+      status.className = "panel-status ok";
+      status.textContent =
+        "Ready · " + item.wears_since_wash +
+        " wear" + (item.wears_since_wash === 1 ? "" : "s") + " since wash";
+    }
+
+    const meta = document.getElementById("panel-meta");
+    meta.innerHTML = "";
+    const rows = [
+      ["Type", item.type.replace(/_/g, " ")],
+      ["Color", item.color || "—"],
+      ["Pattern", item.pattern],
+      ["Sleeve", item.sleeve.replace(/_/g, " ")],
+      ["Qty", item.quantity],
+    ];
+    if (item.name) rows.push(["Name", item.name]);
+    rows.forEach(([k, v]) => {
+      const w = document.createElement("div");
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = k;
+      dd.textContent = String(v);
+      w.append(dt, dd);
+      meta.appendChild(w);
+    });
+
+    document.getElementById("panel-edit").href = "/items/" + item.id + "/edit";
+    document.getElementById("panel-delete-form").action =
+      "/items/" + item.id + "/delete";
+    overlay.hidden = false;
+    panel.focus();
+  }
+
+  function closeDetail() {
+    if (overlay.hidden) return;
+    overlay.hidden = true;
+    activeItem = null;
+    if (lastOpener && document.contains(lastOpener)) {
+      lastOpener.focus();
+    }
+    lastOpener = null;
+  }
+
+  function openCtx(item, x, y) {
+    ctxItem = item;
+    ctx.hidden = false;
+    const w = ctx.offsetWidth;
+    const h = ctx.offsetHeight;
+    ctx.style.left = Math.min(x, window.innerWidth - w - 8) + "px";
+    ctx.style.top = Math.min(y, window.innerHeight - h - 8) + "px";
+    const first = ctx.querySelector("button");
+    if (first) first.focus();
+  }
+
+  function closeCtx() {
+    ctx.hidden = true;
+    ctxItem = null;
+  }
+
+  document.getElementById("tile-grid")?.addEventListener("click", (e) => {
+    if (suppressNextClick) {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressNextClick = false;
+      return;
+    }
+    const tile = e.target.closest(".tile");
+    if (!tile) return;
+    e.preventDefault();
+    try {
+      openDetail(JSON.parse(tile.dataset.payload), tile);
+    } catch (_) {}
+  });
+
+  document.getElementById("tile-grid")?.addEventListener("contextmenu", (e) => {
+    const tile = e.target.closest(".tile");
+    if (!tile) return;
+    e.preventDefault();
+    try {
+      openCtx(JSON.parse(tile.dataset.payload), e.clientX, e.clientY);
+    } catch (_) {}
+  });
+
+  // Long-press → context menu (touch); consume following emulated click
+  let pressTimer = null;
+  let pressXY = null;
+  const grid = document.getElementById("tile-grid");
+  grid?.addEventListener("pointerdown", (e) => {
+    suppressNextClick = false;
+    if (e.pointerType === "mouse") return;
+    const tile = e.target.closest(".tile");
+    if (!tile) return;
+    pressXY = { x: e.clientX, y: e.clientY };
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      suppressNextClick = true;
+      try {
+        openCtx(JSON.parse(tile.dataset.payload), pressXY.x, pressXY.y);
+      } catch (_) {}
+    }, 500);
+  });
+  grid?.addEventListener("pointerup", () => {
+    if (pressTimer) clearTimeout(pressTimer);
+    pressTimer = null;
+  });
+  grid?.addEventListener("pointercancel", () => {
+    if (pressTimer) clearTimeout(pressTimer);
+    pressTimer = null;
+    suppressNextClick = false;
+  });
+  grid?.addEventListener("pointermove", (e) => {
+    if (!pressTimer || !pressXY) return;
+    if (Math.hypot(e.clientX - pressXY.x, e.clientY - pressXY.y) > 12) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  });
+
+  document.querySelectorAll("[data-open-item]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = Number(el.getAttribute("data-open-item"));
+      const tile = document.querySelector('.tile[data-item-id="' + id + '"]');
+      if (tile) {
+        try {
+          openDetail(JSON.parse(tile.dataset.payload), el);
+        } catch (_) {}
+      }
+    });
+  });
+
+  ctx.addEventListener("click", (e) => {
+    if (suppressNextClick) {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressNextClick = false;
+      return;
+    }
+    const btn = e.target.closest("button[data-action]");
+    if (!btn || !ctxItem) return;
+    const action = btn.getAttribute("data-action");
+    const item = ctxItem;
+    closeCtx();
+    if (action === "details") openDetail(item);
+    else if (action === "edit") window.location.href = "/items/" + item.id + "/edit";
+    else if (action === "delete") {
+      if (confirm('Delete "' + (item.display_name || item.name || item.type) + '"?')) {
+        const f = document.createElement("form");
+        f.method = "post";
+        f.action = "/items/" + item.id + "/delete";
+        document.body.appendChild(f);
+        f.submit();
+      }
+    }
+  });
+
+  panelClose.addEventListener("click", closeDetail);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeDetail();
+  });
+  document.addEventListener("click", (e) => {
+    if (!ctx.hidden && !ctx.contains(e.target)) closeCtx();
+    if (suppressNextClick && !e.target.closest(".tile") && !e.target.closest("#ctx-menu")) {
+      suppressNextClick = false;
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeCtx();
+      closeDetail();
+      return;
+    }
+    if (e.key === "Tab" && overlay && !overlay.hidden) {
+      const nodes = focusableIn(panel);
+      if (!nodes.length) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (!panel.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  });
+})();
+</script>
+{% endblock %}

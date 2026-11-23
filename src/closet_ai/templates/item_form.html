@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if item else 'Add' }} item · Closet AI{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>{{ 'Edit' if item else 'Add item' }}</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ ('/items/' ~ item.id ~ '/edit') if item else '/items/new' }}">
+    <label for="name">Name <span class="optional">optional</span></label>
+    <input id="name" name="name" maxlength="80" value="{{ item.name if item else '' }}"
+           placeholder="Grey crew tee — leave blank to auto-label" />
+
+    <label for="type">Type</label>
+    <select id="type" name="type" required>
+      {% for t in item_types %}
+      <option value="{{ t }}" {% if item and item.type == t %}selected{% endif %}>{{ t.replace('_',' ') }}</option>
+      {% endfor %}
+    </select>
+
+    <div class="form-row">
+      <div>
+        <label for="color">Color</label>
+        <input id="color" name="color" maxlength="40" value="{{ item.color if item else '' }}" placeholder="black, navy…" />
+      </div>
+      <div>
+        <label for="quantity">Qty</label>
+        <input id="quantity" name="quantity" type="number" min="1" max="99" value="{{ item.quantity if item else 1 }}" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div>
+        <label for="pattern">Pattern</label>
+        <select id="pattern" name="pattern">
+          {% for p in patterns %}
+          <option value="{{ p }}" {% if item and item.pattern == p %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="sleeve">Sleeve</label>
+        <select id="sleeve" name="sleeve">
+          {% for s in sleeves %}
+          <option value="{{ s }}" {% if item and item.sleeve == s %}selected{% endif %}>{{ s.replace('_',' ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <button type="submit" class="primary">{{ 'Save' if item else 'Create item' }}</button>
+    {% if item %}
+    <a class="btn ghost form-cancel" href="/items/{{ item.id }}">Cancel</a>
+    {% else %}
+    <a class="btn ghost form-cancel" href="/">Cancel</a>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

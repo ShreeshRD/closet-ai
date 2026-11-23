@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ item.display_name }} · Closet AI{% endblock %}
+{% block content %}
+<div class="card detail-card">
+  <div class="row-between detail-head">
+    <div class="detail-title">
+      <span class="swatch lg" data-color="{{ item.color }}"></span>
+      <div>
+        <h1>{{ item.display_name }}</h1>
+        <p class="muted sub">{{ item.type.replace('_',' ') }}{% if item.color %} · {{ item.color }}{% endif %}{% if item.quantity > 1 %} · ×{{ item.quantity }}{% endif %}</p>
+      </div>
+    </div>
+    <div class="actions">
+      <a class="btn ghost" href="/items/{{ item.id }}/edit">Edit</a>
+      <form method="post" action="/items/{{ item.id }}/delete" class="inline"
+            onsubmit="return confirm('Delete this item?');">
+        <button type="submit" class="btn danger">Delete</button>
+      </form>
+    </div>
+  </div>
+
+  {% if item.state == 'due' %}
+  <div class="banner due-banner">Due for wash</div>
+  {% else %}
+  <div class="banner ok-banner">Ready · {{ item.wears_since_wash }} wear{{ 's' if item.wears_since_wash != 1 }} since wash</div>
+  {% endif %}
+
+  <dl class="meta compact-meta">
+    <div><dt>Pattern</dt><dd>{{ item.pattern }}</dd></div>
+    <div><dt>Sleeve</dt><dd>{{ item.sleeve.replace('_',' ') }}</dd></div>
+    <div><dt>Qty</dt><dd>{{ item.quantity }}</dd></div>
+    <div><dt>Wears</dt><dd>{{ item.wears_since_wash }}</dd></div>
+  </dl>
+
+  <p class="muted small"><a href="/">← Back to wardrobe</a></p>
+</div>
+{% endblock %}
