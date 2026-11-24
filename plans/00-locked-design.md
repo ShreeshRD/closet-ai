@@ -252,30 +252,30 @@ settings (
 ## 8. Implementation phases
 
 ### Phase 0 — Skeleton
-- [ ] `uv` project, FastAPI, PIN auth, LAN bind, base layout (htmx)
-- [ ] SQLite schema + migrations
-- [ ] CRUD items (manual fields only, no vision yet)
+- [x] `uv` project, FastAPI, PIN auth, LAN bind, base layout (htmx)
+- [x] SQLite schema + migrations
+- [x] CRUD items (manual fields only, no vision yet)
 
 ### Phase 1 — Capture + identity
-- [ ] Capture page (webcam + phone getUserMedia upload)
-- [ ] YOLOv8n/s inference + attribute head (or interim: full-frame classifier only)
-- [ ] Confirm UI (all required fields + qty)
-- [ ] Embedding store + “Same as…?” match flow
-- [ ] Fallback / retake on low confidence
+- [x] Capture page (webcam + phone getUserMedia upload)
+- [x] YOLOv8n/s inference + attribute head (or interim: full-frame classifier only)
+- [x] Confirm UI (all required fields + qty)
+- [x] Embedding store + “Same as…?” match flow
+- [x] Fallback / retake on low confidence
 
 ### Phase 2 — Logging + wash
-- [ ] Smart candidates + multi-select undress log
-- [ ] Dirt rating + undo + backlog
-- [ ] Composite due rules + defaults table
-- [ ] Due list + mark washed (single/batch) + history archive
-- [ ] Post-rating due feedback
-- [ ] Daily SQLite backup
+- [x] Smart candidates + multi-select undress log
+- [x] Dirt rating + undo + backlog
+- [x] Composite due rules + defaults table
+- [x] Due list + mark washed (single/batch) + history archive
+- [x] Post-rating due feedback
+- [x] Daily SQLite backup
 
 ### Phase 3 — Polish v1
-- [ ] Settings: view/edit thresholds (optional UI), climate_hint toggle (schema only ok)
-- [ ] Empty states, basic stats (wears since wash, last washed)
-- [ ] README run instructions
-- [ ] **Ship gate:** full loop works offline on LAN with webcam + phone
+- [x] Settings: view/edit thresholds (optional UI), climate_hint toggle (schema only ok)
+- [x] Empty states, basic stats (wears since wash, last washed)
+- [x] README run instructions
+- [x] **Ship gate:** full loop works offline on LAN with webcam + phone (verified via phone hotspot HTTPS `10.193.170.194:8420`; home SSID `Ravindra Reddy@3main` blocked client→client — router AP isolation)
 
 ### Phase 4+ — v2 (explicitly out of v1)
 - Voice (wake + PTT, local STT/TTS)

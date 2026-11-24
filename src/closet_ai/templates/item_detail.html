@@ -21,6 +21,9 @@
 
   {% if item.state == 'due' %}
   <div class="banner due-banner">Due for wash</div>
+  <form method="post" action="/due/wash/{{ item.id }}" class="inline" style="margin:0.5rem 0 0.75rem">
+    <button type="submit" class="btn">Mark washed</button>
+  </form>
   {% else %}
   <div class="banner ok-banner">Ready · {{ item.wears_since_wash }} wear{{ 's' if item.wears_since_wash != 1 }} since wash</div>
   {% endif %}
@@ -29,8 +32,35 @@
     <div><dt>Pattern</dt><dd>{{ item.pattern }}</dd></div>
     <div><dt>Sleeve</dt><dd>{{ item.sleeve.replace('_',' ') }}</dd></div>
     <div><dt>Qty</dt><dd>{{ item.quantity }}</dd></div>
-    <div><dt>Wears</dt><dd>{{ item.wears_since_wash }}</dd></div>
+    <div><dt>Wears since wash</dt><dd>{{ item.wears_since_wash }}</dd></div>
+    <div><dt>Last washed</dt><dd>{{ washes[0].washed_at[:10] if washes else '—' }}</dd></div>
   </dl>
+
+  {% if washes %}
+  <section class="card compact" style="margin-top:0.75rem">
+    <h2>Wash history</h2>
+    <ul class="chip-list">
+      {% for w in washes %}
+      <li><span class="chip">{{ w.washed_at[:10] }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% else %}
+  <p class="muted small" style="margin-top:0.75rem">Never washed yet — counters start at zero.</p>
+  {% endif %}
+
+  {% if ratings %}
+  <section class="card compact" style="margin-top:0.5rem">
+    <h2>Recent dirt ratings</h2>
+    <ul class="chip-list">
+      {% for r in ratings[:8] %}
+      <li><span class="chip">{{ r.dirt }} · {{ r.rated_at[:10] }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% else %}
+  <p class="muted small">No dirt ratings yet.</p>
+  {% endif %}
 
   <p class="muted small"><a href="/">← Back to wardrobe</a></p>
 </div>

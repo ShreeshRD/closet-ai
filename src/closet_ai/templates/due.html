@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Wash list · Closet AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="row-between">
+    <h1>Wash list</h1>
+    <div class="actions">
+      <a class="btn ghost" href="/log">Log undress</a>
+      <a class="btn ghost" href="/">← Wardrobe</a>
+    </div>
+  </div>
+  <p class="muted">Due items. Mark washed to reset wears and clear the queue.</p>
+</section>
+
+{% if request.query_params.get('washed') %}
+<p class="banner ok-banner">Washed — counters reset.</p>
+{% endif %}
+
+<section class="card">
+  {% if not due %}
+    <p class="muted empty-tiles">Nothing due. Laundry is caught up. 🎉</p>
+  {% else %}
+  <div class="row-between">
+    <h2>{{ due|length }} due</h2>
+    <button type="button" class="btn" id="wash-all">Mark all washed</button>
+  </div>
+  <ul class="due-full-list" id="due-list">
+    {% for item in due %}
+    <li class="due-row" data-item-id="{{ item.id }}">
+      <span class="swatch" data-color="{{ item.color }}"></span>
+      <span class="due-meta">
+        <a href="/items/{{ item.id }}" class="due-name">{{ item.display_name }}</a>
+        <span class="muted small">{{ item.type.replace('_',' ') }} · {{ item.wears_since_wash }}w since wash{% if item.last_washed_at %} · washed {{ item.last_washed_at[:10] }}{% else %} · never washed{% endif %}</span>
+      </span>
+      <form method="post" action="/due/wash/{{ item.id }}" class="inline">
+        <button type="submit" class="btn ghost">Mark washed</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="error" id="due-error" hidden></p>
+</section>
+
+<script>
+(function () {
+  const washAll = document.getElementById("wash-all");
+  washAll?.addEventListener("click", async () => {
+    const ids = Array.from(document.querySelectorAll(".due-row")).map((li) =>
+      Number(li.getAttribute("data-item-id"))
+    );
+    if (!ids.length) return;
+    washAll.disabled = true;
+    washAll.textContent = "Washing…";
+    try {
+      const fd = new FormData();
+      ids.forEach((id) => fd.append("item_ids", String(id)));
+      const res = await fetch("/api/wash", { method: "POST", body: fd });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      window.location.href = "/due?washed=1";
+    } catch (e) {
+      const err = document.getElementById("due-error");
+      err.hidden = false;
+      err.textContent = e.message || "Failed";
+      washAll.disabled = false;
+      washAll.textContent = "Mark all washed";
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Settings · Closet AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="row-between">
+    <h1>Settings</h1>
+    <a class="btn ghost" href="/">← Wardrobe</a>
+  </div>
+  <p class="muted">Wash thresholds per garment type. Dirt rules stay fixed for clarity.</p>
+</section>
+
+{% if saved %}
+<p class="banner ok-banner">
+  {% if saved == 'thresholds' %}Thresholds saved — due list rechecked.
+  {% elif saved == 'reset' %}Thresholds reset to defaults.
+  {% elif saved == 'climate' %}Climate hint saved.
+  {% else %}Saved.{% endif %}
+</p>
+{% endif %}
+{% if error %}
+<p class="banner due-banner">{{ error }}</p>
+{% endif %}
+
+<section class="card">
+  <h2>Wash thresholds</h2>
+  <p class="muted small" style="margin-top:0">
+    An item goes due when wears ≥ max, days since wash ≥ cap, last dirt ≥ {{ latest_threshold }},
+    or avg dirt ≥ {{ avg_threshold }} (after ≥ {{ min_ratings }} ratings).
+  </p>
+  <form method="post" action="/settings/thresholds" class="threshold-form">
+    <table class="threshold-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Max wears</th>
+          <th>Days cap</th>
+          <th>Weight</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="{{ 'overridden' if row.overridden }}">
+          <td>
+            <span class="th-type">{{ row.type.replace('_',' ') }}</span>
+            {% if row.overridden %}<span class="optional">custom</span>{% endif %}
+          </td>
+          <td>
+            <label class="sr-only" for="mw-{{ row.type }}">{{ row.type }} max wears</label>
+            <input id="mw-{{ row.type }}" name="max_wears_{{ row.type }}" type="number"
+                   min="1" max="60" value="{{ row.max_wears }}" />
+          </td>
+          <td>
+            <label class="sr-only" for="dc-{{ row.type }}">{{ row.type }} days cap</label>
+            <input id="dc-{{ row.type }}" name="days_cap_{{ row.type }}" type="number"
+                   min="1" max="365" value="{{ row.days_cap }}" />
+          </td>
+          <td class="muted small">{{ row.dirt_weight }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="row-between confirm-alt">
+      <button type="submit" class="btn">Save thresholds</button>
+    </div>
+  </form>
+  <form method="post" action="/settings/thresholds/reset" class="inline" style="margin-top:0.5rem">
+    <button type="submit" class="btn ghost">Reset to defaults</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Climate hint</h2>
+  <p class="muted small" style="margin-top:0">
+    Reserved for outfit pairing (v2). Stored in settings; no effect on wash rules yet.
+  </p>
+  <form method="post" action="/settings/climate" class="row-between">
+    <label class="switch-row">
+      <input type="checkbox" name="climate" value="1" {% if climate %}checked{% endif %} />
+      <span>Prefer seasonal / climate-aware suggestions later</span>
+    </label>
+    <button type="submit" class="btn ghost">Save</button>
+  </form>
+</section>
+
+<p class="muted small"><a href="/due">Wash list</a> · <a href="/log">Log undress</a></p>
+{% endblock %}

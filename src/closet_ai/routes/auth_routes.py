@@ -54,12 +54,12 @@ async def login_submit(request: Request, pin: str = Form(...)):
                 status_code=400,
             )
         resp = RedirectResponse("/", status_code=303)
-        auth.issue_session(resp)
+        auth.issue_session(resp, request)
         return resp
 
     if auth.try_unlock(pin):
         resp = RedirectResponse("/", status_code=303)
-        auth.issue_session(resp)
+        auth.issue_session(resp, request)
         return resp
 
     fails, _ = auth._read_fails()

@@ -45,7 +45,16 @@ HOST = os.environ.get("CLOSET_AI_HOST", "0.0.0.0")
 PORT = int(os.environ.get("CLOSET_AI_PORT", "8420"))
 SESSION_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
+# Local HTTPS (required for getUserMedia camera on LAN, not just localhost)
+SSL_CERT_FILE = Path(os.environ.get("CLOSET_AI_SSL_CERT", data_dir() / "certs" / "cert.pem"))
+SSL_KEY_FILE = Path(os.environ.get("CLOSET_AI_SSL_KEY", data_dir() / "certs" / "key.pem"))
+SSL_ENABLED = (
+    os.environ.get("CLOSET_AI_SSL", "1") not in ("0", "false", "no")
+    and SSL_CERT_FILE.is_file()
+    and SSL_KEY_FILE.is_file()
+)
+
 
 def ensure_dirs() -> None:
-    for d in (data_dir(), images_dir(), backups_dir(), models_dir()):
+    for d in (data_dir(), images_dir(), backups_dir(), models_dir(), data_dir() / "certs"):
         d.mkdir(parents=True, exist_ok=True)

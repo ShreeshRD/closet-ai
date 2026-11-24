@@ -1,0 +1,630 @@
+{% extends "base.html" %}
+{% block title %}Capture · Closet AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="row-between">
+    <h1>Capture</h1>
+    <a class="btn ghost" href="/">← Wardrobe</a>
+  </div>
+  <p class="muted">Hold one garment up. Photo stays on this machine.</p>
+</section>
+
+<div class="capture-grid">
+  <section class="card capture-card">
+    <h2>1 · Photo</h2>
+
+    <div class="capture-modes">
+      <label class="btn mode-btn" title="Pick or take a photo (works on phone and desktop)">
+        📷 Photo
+        <input type="file" id="file-input" accept="image/*" capture="environment" hidden />
+      </label>
+      <button type="button" class="btn ghost" id="webcam-toggle">Use webcam</button>
+      <button type="button" class="btn ghost" id="retake-btn" hidden title="Discard photo and open the camera again">
+        ↻ Retake
+      </button>
+    </div>
+    <p class="muted small" id="webcam-hint" hidden></p>
+
+    <div class="preview-wrap">
+      <img id="preview" alt="" hidden />
+      <video id="webcam" playsinline hidden></video>
+      <div class="preview-empty muted" id="preview-empty">No photo yet</div>
+    </div>
+
+    <div class="row-between capture-actions">
+      <button type="button" class="btn primary-block" id="shoot-btn" hidden>Shoot</button>
+      <button type="button" class="btn ghost" id="retake-action" hidden>Retake</button>
+    </div>
+    <p class="muted small" id="photo-status" hidden></p>
+
+    <div class="voice-bar" id="voice-bar" title="Hands-free while webcam is on">
+      <span class="voice-dot" id="voice-dot" data-state="off" aria-hidden="true"></span>
+      <div class="voice-meta">
+        <span class="voice-label">Voice</span>
+        <span class="voice-status small muted" id="voice-status">Off — start webcam</span>
+      </div>
+      <span class="voice-heard small" id="voice-heard" hidden></span>
+    </div>
+    <p class="muted small" id="voice-hint">
+      While the camera is on, say <strong>shoot</strong> (photo + analyze) or <strong>retake</strong>.
+    </p>
+
+    <p class="error" id="capture-error" hidden></p>
+  </section>
+
+  <section class="card capture-card" id="result-card" hidden>
+    <h2>2 · Confirm</h2>
+
+    <div id="match-block" hidden>
+      <p class="muted small">Looks familiar — same as an item you already have?</p>
+      <ul class="chip-list" id="match-list"></ul>
+      <div class="row-between confirm-alt">
+        <button type="button" class="btn ghost" id="new-anyway">None of these — new item</button>
+        <button type="button" class="btn danger" id="cancel-confirm">Cancel</button>
+      </div>
+    </div>
+
+    <form id="confirm-form" hidden>
+      <input type="hidden" id="f-token" />
+      <div class="form-row">
+        <div>
+          <label for="f-type">Type</label>
+          <select id="f-type" name="type" required>
+            {% for t in item_types %}
+            <option value="{{ t }}">{{ t.replace('_',' ') }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="f-qty">Qty</label>
+          <input id="f-qty" name="quantity" type="number" min="1" max="99" value="1" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="f-color">Color <span class="optional">auto</span></label>
+          <input id="f-color" name="color" maxlength="40" />
+        </div>
+        <div>
+          <label for="f-name">Name <span class="optional">optional</span></label>
+          <input id="f-name" name="name" maxlength="80" placeholder="auto from color + type" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="f-pattern">Pattern</label>
+          <select id="f-pattern" name="pattern">
+            {% for p in patterns %}
+            <option value="{{ p }}">{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="f-sleeve">Sleeve</label>
+          <select id="f-sleeve" name="sleeve">
+            {% for s in sleeves %}
+            <option value="{{ s }}">{{ s.replace('_',' ') }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="primary">Add to wardrobe</button>
+      <div class="row-between confirm-alt">
+        <button type="button" class="btn ghost" id="retake-from-confirm">↻ Retake</button>
+        <button type="button" class="btn danger" id="cancel-confirm-form">Cancel</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<script>
+(function () {
+  const fileInput = document.getElementById("file-input");
+  const preview = document.getElementById("preview");
+  const video = document.getElementById("webcam");
+  const previewEmpty = document.getElementById("preview-empty");
+  const shootBtn = document.getElementById("shoot-btn");
+  const retakeAction = document.getElementById("retake-action");
+  const webcamToggle = document.getElementById("webcam-toggle");
+  const retakeBtn = document.getElementById("retake-btn");
+  const photoStatus = document.getElementById("photo-status");
+  const errEl = document.getElementById("capture-error");
+  const resultCard = document.getElementById("result-card");
+  const matchBlock = document.getElementById("match-block");
+  const matchList = document.getElementById("match-list");
+  const confirmForm = document.getElementById("confirm-form");
+  const tokenInput = document.getElementById("f-token");
+
+  let blob = null;
+  let stream = null;
+  let token = null;
+  let analyzing = false;
+
+  const webcamHint = document.getElementById("webcam-hint");
+  const isLocalHost =
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1" ||
+    location.hostname === "[::1]";
+  const canUseWebcam =
+    !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) &&
+    (window.isSecureContext || isLocalHost);
+
+  function setWebcamEnabled(on) {
+    webcamToggle.disabled = !on;
+    webcamToggle.classList.toggle("ghost", true);
+    if (on) {
+      webcamHint.hidden = true;
+      webcamHint.textContent = "";
+      webcamToggle.title = "Open live camera preview";
+      return;
+    }
+    webcamToggle.title = "Camera API unavailable here";
+    let why;
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      why = "This browser does not expose the camera API on this page.";
+    } else if (!window.isSecureContext && !isLocalHost) {
+      why =
+        "Live webcam needs https:// or http://localhost — plain http://192.168… blocks it.";
+    } else {
+      why = "Camera not available.";
+    }
+    webcamHint.hidden = false;
+    const httpsPort = location.port || "8420";
+    const lanHost =
+      location.hostname === "localhost" || location.hostname === "127.0.0.1"
+        ? "this computer"
+        : location.hostname;
+    webcamHint.textContent =
+      why +
+      " Use 📷 Photo to pick a file, or open https://" +
+      lanHost +
+      ":" +
+      httpsPort +
+      "/capture (accept the certificate warning once) so the browser allows the camera.";
+  }
+
+  setWebcamEnabled(canUseWebcam);
+
+  function showError(msg) {
+    errEl.hidden = !msg;
+    errEl.textContent = msg || "";
+  }
+
+  function setVoiceLabel(msg) {
+    if (typeof setVoiceState === "function") setVoiceState("idle", msg);
+  }
+
+  function syncControls() {
+    const live = !!stream;
+    const hasPhoto = !!blob;
+    shootBtn.hidden = !live;
+    shootBtn.disabled = analyzing;
+    shootBtn.textContent = analyzing ? "Analyzing…" : "Shoot";
+    retakeAction.hidden = !(hasPhoto || !live);
+    retakeBtn.hidden = !hasPhoto;
+    if (photoStatus) {
+      if (analyzing) {
+        photoStatus.hidden = false;
+        photoStatus.textContent = "Analyzing photo…";
+      } else if (hasPhoto) {
+        photoStatus.hidden = false;
+        photoStatus.textContent = "Photo captured — confirming below";
+      } else if (live) {
+        photoStatus.hidden = false;
+        photoStatus.textContent = "Camera live — say shoot or press Shoot";
+      } else {
+        photoStatus.hidden = true;
+        photoStatus.textContent = "";
+      }
+    }
+  }
+
+  /** Keep mic voice running; only stop the video tracks. */
+  function stopVideoTracks() {
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+    video.hidden = true;
+  }
+
+  function showPreviewImage(dataUrl) {
+    stopVideoTracks();
+    preview.src = dataUrl;
+    preview.hidden = false;
+    previewEmpty.hidden = true;
+    webcamToggle.textContent = "Use webcam";
+    syncControls();
+  }
+
+  /**
+   * Discard photo + confirm UI and reopen the live camera.
+   * Voice listener is intentionally left running.
+   */
+  function retakePhoto() {
+    blob = null;
+    fileInput.value = "";
+    preview.removeAttribute("src");
+    preview.hidden = true;
+    previewEmpty.hidden = false;
+    previewEmpty.textContent = "No photo yet";
+    resetAnalysis();
+    showError("");
+    // Open webcam without stopping voice
+    openWebcam({ keepVoice: true });
+  }
+
+  async function openWebcam(opts) {
+    const keepVoice = !!(opts && opts.keepVoice);
+    showError("");
+    if (!canUseWebcam) {
+      setWebcamEnabled(false);
+      showError(
+        "Webcam needs HTTPS on this address. Open https://" +
+          location.hostname +
+          ":" +
+          (location.port || "8420") +
+          "/capture and accept the certificate warning, or use 📷 Photo."
+      );
+      return;
+    }
+    try {
+      stopVideoTracks();
+      if (!keepVoice) {
+        // first open from cold start
+      }
+      webcamToggle.disabled = true;
+      webcamToggle.textContent = "Starting camera…";
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      video.hidden = false;
+      preview.hidden = true;
+      previewEmpty.hidden = true;
+      blob = null;
+      await video.play();
+      webcamToggle.textContent = "Camera on";
+      syncControls();
+      if (!voiceActive) startVoice();
+      else setVoiceState("idle", "Listening — say shoot or retake");
+    } catch (e) {
+      const msg =
+        e && e.name === "NotAllowedError"
+          ? "Camera permission denied — allow it in the browser, or use 📷 Photo."
+          : "Camera unavailable (" +
+            (e && e.message ? e.message : e.name || e) +
+            "). Use 📷 Photo instead.";
+      showError(msg);
+      setWebcamEnabled(canUseWebcam);
+      webcamToggle.textContent = "Use webcam";
+      stopVideoTracks();
+      previewEmpty.hidden = false;
+      syncControls();
+    }
+  }
+
+  retakeBtn.addEventListener("click", retakePhoto);
+  retakeAction.addEventListener("click", retakePhoto);
+  document.getElementById("retake-from-confirm").addEventListener("click", retakePhoto);
+
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    showError("");
+    blob = f;
+    showPreviewImage(URL.createObjectURL(f));
+    // Picked photo → analyze immediately (same as shoot)
+    analyzeBlob();
+  });
+
+  webcamToggle.addEventListener("click", () => openWebcam({ keepVoice: voiceActive }));
+
+  /** Capture the current frame AND analyze it — one step. */
+  function shootAndAnalyze() {
+    if (!stream || !video.videoWidth) {
+      showError("Camera not ready — open the webcam first.");
+      return false;
+    }
+    const c = document.createElement("canvas");
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    const ctx = c.getContext("2d");
+    if (!ctx) {
+      showError("Could not read camera frame — use 📷 Photo instead.");
+      return false;
+    }
+    ctx.drawImage(video, 0, 0);
+    c.toBlob((b) => {
+      if (!b) {
+        showError("Failed to capture frame — try again.");
+        return;
+      }
+      blob = b;
+      showPreviewImage(c.toDataURL("image/jpeg", 0.92));
+      showError("");
+      analyzeBlob();
+    }, "image/jpeg", 0.92);
+    return true;
+  }
+
+  shootBtn.addEventListener("click", () => {
+    shootAndAnalyze();
+  });
+
+  async function analyzeBlob() {
+    if (!blob || analyzing) return;
+    analyzing = true;
+    syncControls();
+    showError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", blob, "capture.jpg");
+      const res = await fetch("/api/capture", { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      renderResult(body);
+    } catch (e) {
+      showError(e.message || "Upload failed");
+    } finally {
+      analyzing = false;
+      syncControls();
+    }
+  }
+
+  function renderResult(body) {
+    token = body.token;
+    tokenInput.value = token;
+    resultCard.hidden = false;
+
+    if (body.matches && body.matches.length) {
+      matchBlock.hidden = false;
+      matchList.innerHTML = "";
+      body.matches.forEach((m) => {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip due-chip";
+        btn.textContent = m.display_name + " · " + Math.round(m.score * 100) + "%";
+        btn.addEventListener("click", () => sameAs(m.item_id));
+        li.appendChild(btn);
+        matchList.appendChild(li);
+      });
+      confirmForm.hidden = true;
+    } else {
+      showConfirmForm(body.prefill);
+    }
+
+    resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function showConfirmForm(prefill) {
+    matchBlock.hidden = true;
+    confirmForm.hidden = false;
+    if (prefill) {
+      document.getElementById("f-color").value = prefill.color || "";
+      document.getElementById("f-type").value = prefill.type || "tshirt";
+      document.getElementById("f-pattern").value = prefill.pattern || "solid";
+      document.getElementById("f-sleeve").value = prefill.sleeve || "short";
+      document.getElementById("f-qty").value = prefill.quantity || 1;
+      document.getElementById("f-name").value = prefill.name || "";
+    }
+  }
+
+  function resetAnalysis() {
+    token = null;
+    tokenInput.value = "";
+    resultCard.hidden = true;
+    matchBlock.hidden = true;
+    confirmForm.hidden = true;
+    matchList.innerHTML = "";
+    showError("");
+    syncControls();
+  }
+
+  function cancelAnalysis() {
+    resetAnalysis();
+    setVoiceLabel(
+      voiceActive ? "Listening — say shoot or retake" : "Off — start webcam"
+    );
+  }
+
+  document.getElementById("cancel-confirm").addEventListener("click", cancelAnalysis);
+  document.getElementById("cancel-confirm-form").addEventListener("click", cancelAnalysis);
+
+  document.getElementById("new-anyway").addEventListener("click", () => {
+    showConfirmForm(null);
+  });
+
+  async function sameAs(itemId) {
+    showError("");
+    try {
+      const fd = new FormData();
+      fd.append("token", token);
+      fd.append("item_id", String(itemId));
+      const res = await fetch("/api/capture/same-as", { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      window.location.href = "/items/" + itemId;
+    } catch (e) {
+      showError(e.message || "Failed");
+    }
+  }
+
+  confirmForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    showError("");
+    const payload = {
+      token: token,
+      type: document.getElementById("f-type").value,
+      color: document.getElementById("f-color").value,
+      name: document.getElementById("f-name").value,
+      pattern: document.getElementById("f-pattern").value,
+      sleeve: document.getElementById("f-sleeve").value,
+      quantity: Number(document.getElementById("f-qty").value) || 1,
+    };
+    try {
+      const res = await fetch("/api/capture/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      window.location.href = body.redirect || "/";
+    } catch (err) {
+      showError(err.message || "Could not save");
+    }
+  });
+
+  // —— Hands-free voice: shoot (capture+analyze) / retake ——
+  const voiceDot = document.getElementById("voice-dot");
+  const voiceStatus = document.getElementById("voice-status");
+  const voiceHeard = document.getElementById("voice-heard");
+  let voiceTimer = null;
+  let voiceBusy = false;
+  let voiceActive = false;
+  let lastVoiceHeard = "";
+  let lastCommandAt = 0;
+  let lastCommandName = "";
+
+  function setVoiceState(state, label) {
+    voiceDot.dataset.state = state;
+    voiceStatus.textContent = label;
+  }
+
+  function showHeard(text) {
+    if (!text) {
+      voiceHeard.hidden = true;
+      voiceHeard.textContent = "";
+      return;
+    }
+    voiceHeard.hidden = false;
+    voiceHeard.textContent = "“" + text + "”";
+  }
+
+  function runShootCommand() {
+    if (!stream || video.hidden) {
+      // Camera not live — try to open it, user can shoot again
+      setVoiceState("warn", "Opening camera — say shoot again");
+      openWebcam({ keepVoice: true });
+      return false;
+    }
+    return shootAndAnalyze();
+  }
+
+  function runRetakeCommand() {
+    setVoiceState("ok", "→ retake");
+    retakePhoto();
+    return true;
+  }
+
+  async function startVoice() {
+    voiceActive = true;
+    setVoiceState("idle", "Starting listener…");
+    try {
+      const res = await fetch("/api/voice/listen", { method: "POST" });
+      if (res.status === 401) {
+        setVoiceState("off", "Session ended — reload");
+        voiceActive = false;
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      if (body.ok === false || body.error) {
+        setVoiceState("warn", body.error || body.reason || "Could not start mic");
+      } else {
+        setVoiceState("idle", "Listening — say shoot or retake");
+      }
+    } catch (e) {
+      setVoiceState("warn", "Voice bridge offline");
+    }
+    if (voiceTimer) clearInterval(voiceTimer);
+    pollVoice();
+    voiceTimer = setInterval(pollVoice, 400);
+  }
+
+  function stopVoice() {
+    voiceActive = false;
+    if (voiceTimer) {
+      clearInterval(voiceTimer);
+      voiceTimer = null;
+    }
+    setVoiceState("off", "Off — start webcam");
+    showHeard("");
+    fetch("/api/voice/stop", { method: "POST" }).catch(() => {});
+  }
+
+  async function pollVoice() {
+    if (!voiceActive || voiceBusy) return;
+    voiceBusy = true;
+    try {
+      const res = await fetch("/api/voice-command", {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (res.status === 401) {
+        setVoiceState("off", "Session ended — reload to sign in");
+        voiceActive = false;
+        return;
+      }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const body = await res.json();
+      if (body.error && !body.ok) {
+        setVoiceState("warn", body.error);
+        return;
+      }
+      if (body.heard && body.heard !== lastVoiceHeard) {
+        lastVoiceHeard = body.heard;
+        showHeard(body.heard);
+      }
+      if (body.command) {
+        const now = Date.now();
+        if (body.command === lastCommandName && now - lastCommandAt < 800) {
+          return;
+        }
+        lastCommandAt = now;
+        lastCommandName = body.command;
+        const acted =
+          body.command === "shoot" ? runShootCommand() : runRetakeCommand();
+        if (acted) {
+          setVoiceState(
+            "ok",
+            body.command === "shoot" ? "→ shoot + analyze" : "→ retake"
+          );
+        }
+        return;
+      }
+      if (body.state === "thinking" && !body.heard) {
+        setVoiceState("idle", "Hearing…");
+      } else if (body.state === "error") {
+        setVoiceState("warn", body.error || "Listener error");
+      } else if (body.reason && /cooling/i.test(body.reason)) {
+        setVoiceState("idle", "Cooling down…");
+      } else if (body.reason && /not a capture/i.test(body.reason)) {
+        setVoiceState("warn", "Heard, not a command");
+      } else if (body.running || body.state === "listening") {
+        setVoiceState("idle", "Listening — say shoot or retake");
+      } else {
+        setVoiceState("idle", body.reason || "Listening");
+      }
+    } catch (e) {
+      setVoiceState("warn", "Voice bridge offline");
+    } finally {
+      voiceBusy = false;
+    }
+  }
+
+  // Leaving the page releases the mic
+  window.addEventListener("pagehide", () => {
+    if (voiceActive) {
+      voiceActive = false;
+      if (voiceTimer) clearInterval(voiceTimer);
+      navigator.sendBeacon && navigator.sendBeacon("/api/voice/stop");
+    }
+  });
+
+  syncControls();
+})();
+</script>
+{% endblock %}
