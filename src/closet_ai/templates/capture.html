@@ -19,6 +19,9 @@
         <input type="file" id="file-input" accept="image/*" capture="environment" hidden />
       </label>
       <button type="button" class="btn ghost" id="webcam-toggle">Use webcam</button>
+      <button type="button" class="btn ghost" id="retake-btn" hidden title="Discard photo and open the camera again">
+        ↻ Retake
+      </button>
     </div>
     <p class="muted small" id="webcam-hint" hidden></p>
 
@@ -29,9 +32,23 @@
     </div>
 
     <div class="row-between capture-actions">
-      <button type="button" class="btn" id="shoot-btn" hidden>Shoot</button>
-      <button type="button" class="btn primary-block" id="analyze-btn" disabled>Analyze</button>
+      <button type="button" class="btn primary-block" id="shoot-btn" hidden>Shoot</button>
+      <button type="button" class="btn ghost" id="retake-action" hidden>Retake</button>
     </div>
+    <p class="muted small" id="photo-status" hidden></p>
+
+    <div class="voice-bar" id="voice-bar" title="Hands-free while webcam is on">
+      <span class="voice-dot" id="voice-dot" data-state="off" aria-hidden="true"></span>
+      <div class="voice-meta">
+        <span class="voice-label">Voice</span>
+        <span class="voice-status small muted" id="voice-status">Off — start webcam</span>
+      </div>
+      <span class="voice-heard small" id="voice-heard" hidden></span>
+    </div>
+    <p class="muted small" id="voice-hint">
+      While the camera is on, say <strong>shoot</strong> (photo + analyze) or <strong>retake</strong>.
+    </p>
+
     <p class="error" id="capture-error" hidden></p>
   </section>
 
@@ -41,7 +58,10 @@
     <div id="match-block" hidden>
       <p class="muted small">Looks familiar — same as an item you already have?</p>
       <ul class="chip-list" id="match-list"></ul>
-      <button type="button" class="btn ghost" id="new-anyway">None of these — new item</button>
+      <div class="row-between confirm-alt">
+        <button type="button" class="btn ghost" id="new-anyway">None of these — new item</button>
+        <button type="button" class="btn danger" id="cancel-confirm">Cancel</button>
+      </div>
     </div>
 
     <form id="confirm-form" hidden>
@@ -89,6 +109,10 @@
         </div>
       </div>
       <button type="submit" class="primary">Add to wardrobe</button>
+      <div class="row-between confirm-alt">
+        <button type="button" class="btn ghost" id="retake-from-confirm">↻ Retake</button>
+        <button type="button" class="btn danger" id="cancel-confirm-form">Cancel</button>
+      </div>
     </form>
   </section>
 </div>
@@ -99,9 +123,11 @@
   const preview = document.getElementById("preview");
   const video = document.getElementById("webcam");
   const previewEmpty = document.getElementById("preview-empty");
-  const analyzeBtn = document.getElementById("analyze-btn");
   const shootBtn = document.getElementById("shoot-btn");
+  const retakeAction = document.getElementById("retake-action");
   const webcamToggle = document.getElementById("webcam-toggle");
+  const retakeBtn = document.getElementById("retake-btn");
+  const photoStatus = document.getElementById("photo-status");
   const errEl = document.getElementById("capture-error");
   const resultCard = document.getElementById("result-card");
   const matchBlock = document.getElementById("match-block");
@@ -112,6 +138,7 @@
   let blob = null;
   let stream = null;
   let token = null;
+  let analyzing = false;
 
   const webcamHint = document.getElementById("webcam-hint");
   const isLocalHost =
@@ -134,8 +161,7 @@
     webcamToggle.title = "Camera API unavailable here";
     let why;
     if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
-      why =
-        "This browser does not expose the camera API on this page.";
+      why = "This browser does not expose the camera API on this page.";
     } else if (!window.isSecureContext && !isLocalHost) {
       why =
         "Live webcam needs https:// or http://localhost — plain http://192.168… blocks it.";
@@ -164,16 +190,37 @@
     errEl.textContent = msg || "";
   }
 
-  function showPreviewImage(dataUrl) {
-    stopWebcam();
-    preview.src = dataUrl;
-    preview.hidden = false;
-    previewEmpty.hidden = true;
-    analyzeBtn.disabled = false;
-    shootBtn.hidden = true;
+  function setVoiceLabel(msg) {
+    if (typeof setVoiceState === "function") setVoiceState("idle", msg);
   }
 
-  function stopWebcam() {
+  function syncControls() {
+    const live = !!stream;
+    const hasPhoto = !!blob;
+    shootBtn.hidden = !live;
+    shootBtn.disabled = analyzing;
+    shootBtn.textContent = analyzing ? "Analyzing…" : "Shoot";
+    retakeAction.hidden = !(hasPhoto || !live);
+    retakeBtn.hidden = !hasPhoto;
+    if (photoStatus) {
+      if (analyzing) {
+        photoStatus.hidden = false;
+        photoStatus.textContent = "Analyzing photo…";
+      } else if (hasPhoto) {
+        photoStatus.hidden = false;
+        photoStatus.textContent = "Photo captured — confirming below";
+      } else if (live) {
+        photoStatus.hidden = false;
+        photoStatus.textContent = "Camera live — say shoot or press Shoot";
+      } else {
+        photoStatus.hidden = true;
+        photoStatus.textContent = "";
+      }
+    }
+  }
+
+  /** Keep mic voice running; only stop the video tracks. */
+  function stopVideoTracks() {
     if (stream) {
       stream.getTracks().forEach((t) => t.stop());
       stream = null;
@@ -181,16 +228,34 @@
     video.hidden = true;
   }
 
-  fileInput.addEventListener("change", () => {
-    const f = fileInput.files && fileInput.files[0];
-    if (!f) return;
-    showError("");
-    const url = URL.createObjectURL(f);
-    showPreviewImage(url);
-    blob = f;
-  });
+  function showPreviewImage(dataUrl) {
+    stopVideoTracks();
+    preview.src = dataUrl;
+    preview.hidden = false;
+    previewEmpty.hidden = true;
+    webcamToggle.textContent = "Use webcam";
+    syncControls();
+  }
 
-  webcamToggle.addEventListener("click", async () => {
+  /**
+   * Discard photo + confirm UI and reopen the live camera.
+   * Voice listener is intentionally left running.
+   */
+  function retakePhoto() {
+    blob = null;
+    fileInput.value = "";
+    preview.removeAttribute("src");
+    preview.hidden = true;
+    previewEmpty.hidden = false;
+    previewEmpty.textContent = "No photo yet";
+    resetAnalysis();
+    showError("");
+    // Open webcam without stopping voice
+    openWebcam({ keepVoice: true });
+  }
+
+  async function openWebcam(opts) {
+    const keepVoice = !!(opts && opts.keepVoice);
     showError("");
     if (!canUseWebcam) {
       setWebcamEnabled(false);
@@ -204,7 +269,10 @@
       return;
     }
     try {
-      stopWebcam();
+      stopVideoTracks();
+      if (!keepVoice) {
+        // first open from cold start
+      }
       webcamToggle.disabled = true;
       webcamToggle.textContent = "Starting camera…";
       stream = await navigator.mediaDevices.getUserMedia({
@@ -215,27 +283,49 @@
       video.hidden = false;
       preview.hidden = true;
       previewEmpty.hidden = true;
-      shootBtn.hidden = false;
-      analyzeBtn.disabled = true;
+      blob = null;
       await video.play();
       webcamToggle.textContent = "Camera on";
+      syncControls();
+      if (!voiceActive) startVoice();
+      else setVoiceState("idle", "Listening — say shoot or retake");
     } catch (e) {
       const msg =
-        (e && e.name === "NotAllowedError")
+        e && e.name === "NotAllowedError"
           ? "Camera permission denied — allow it in the browser, or use 📷 Photo."
-          : "Camera unavailable (" + (e && e.message ? e.message : e.name || e) + "). Use 📷 Photo instead.";
+          : "Camera unavailable (" +
+            (e && e.message ? e.message : e.name || e) +
+            "). Use 📷 Photo instead.";
       showError(msg);
       setWebcamEnabled(canUseWebcam);
       webcamToggle.textContent = "Use webcam";
-      stopWebcam();
+      stopVideoTracks();
       previewEmpty.hidden = false;
+      syncControls();
     }
+  }
+
+  retakeBtn.addEventListener("click", retakePhoto);
+  retakeAction.addEventListener("click", retakePhoto);
+  document.getElementById("retake-from-confirm").addEventListener("click", retakePhoto);
+
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    showError("");
+    blob = f;
+    showPreviewImage(URL.createObjectURL(f));
+    // Picked photo → analyze immediately (same as shoot)
+    analyzeBlob();
   });
 
-  shootBtn.addEventListener("click", () => {
-    if (!video.videoWidth) {
-      showError("Camera stream not ready yet — wait a moment and try Shoot again.");
-      return;
+  webcamToggle.addEventListener("click", () => openWebcam({ keepVoice: voiceActive }));
+
+  /** Capture the current frame AND analyze it — one step. */
+  function shootAndAnalyze() {
+    if (!stream || !video.videoWidth) {
+      showError("Camera not ready — open the webcam first.");
+      return false;
     }
     const c = document.createElement("canvas");
     c.width = video.videoWidth;
@@ -243,24 +333,30 @@
     const ctx = c.getContext("2d");
     if (!ctx) {
       showError("Could not read camera frame — use 📷 Photo instead.");
-      return;
+      return false;
     }
     ctx.drawImage(video, 0, 0);
     c.toBlob((b) => {
       if (!b) {
-        showError("Failed to capture frame — use 📷 Photo instead.");
+        showError("Failed to capture frame — try again.");
         return;
       }
       blob = b;
       showPreviewImage(c.toDataURL("image/jpeg", 0.92));
       showError("");
+      analyzeBlob();
     }, "image/jpeg", 0.92);
+    return true;
+  }
+
+  shootBtn.addEventListener("click", () => {
+    shootAndAnalyze();
   });
 
-  analyzeBtn.addEventListener("click", async () => {
-    if (!blob) return;
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = "Analyzing…";
+  async function analyzeBlob() {
+    if (!blob || analyzing) return;
+    analyzing = true;
+    syncControls();
     showError("");
     try {
       const fd = new FormData();
@@ -271,11 +367,11 @@
       renderResult(body);
     } catch (e) {
       showError(e.message || "Upload failed");
-      analyzeBtn.disabled = false;
     } finally {
-      analyzeBtn.textContent = "Analyze";
+      analyzing = false;
+      syncControls();
     }
-  });
+  }
 
   function renderResult(body) {
     token = body.token;
@@ -315,6 +411,27 @@
       document.getElementById("f-name").value = prefill.name || "";
     }
   }
+
+  function resetAnalysis() {
+    token = null;
+    tokenInput.value = "";
+    resultCard.hidden = true;
+    matchBlock.hidden = true;
+    confirmForm.hidden = true;
+    matchList.innerHTML = "";
+    showError("");
+    syncControls();
+  }
+
+  function cancelAnalysis() {
+    resetAnalysis();
+    setVoiceLabel(
+      voiceActive ? "Listening — say shoot or retake" : "Off — start webcam"
+    );
+  }
+
+  document.getElementById("cancel-confirm").addEventListener("click", cancelAnalysis);
+  document.getElementById("cancel-confirm-form").addEventListener("click", cancelAnalysis);
 
   document.getElementById("new-anyway").addEventListener("click", () => {
     showConfirmForm(null);
@@ -360,6 +477,154 @@
       showError(err.message || "Could not save");
     }
   });
+
+  // —— Hands-free voice: shoot (capture+analyze) / retake ——
+  const voiceDot = document.getElementById("voice-dot");
+  const voiceStatus = document.getElementById("voice-status");
+  const voiceHeard = document.getElementById("voice-heard");
+  let voiceTimer = null;
+  let voiceBusy = false;
+  let voiceActive = false;
+  let lastVoiceHeard = "";
+  let lastCommandAt = 0;
+  let lastCommandName = "";
+
+  function setVoiceState(state, label) {
+    voiceDot.dataset.state = state;
+    voiceStatus.textContent = label;
+  }
+
+  function showHeard(text) {
+    if (!text) {
+      voiceHeard.hidden = true;
+      voiceHeard.textContent = "";
+      return;
+    }
+    voiceHeard.hidden = false;
+    voiceHeard.textContent = "“" + text + "”";
+  }
+
+  function runShootCommand() {
+    if (!stream || video.hidden) {
+      // Camera not live — try to open it, user can shoot again
+      setVoiceState("warn", "Opening camera — say shoot again");
+      openWebcam({ keepVoice: true });
+      return false;
+    }
+    return shootAndAnalyze();
+  }
+
+  function runRetakeCommand() {
+    setVoiceState("ok", "→ retake");
+    retakePhoto();
+    return true;
+  }
+
+  async function startVoice() {
+    voiceActive = true;
+    setVoiceState("idle", "Starting listener…");
+    try {
+      const res = await fetch("/api/voice/listen", { method: "POST" });
+      if (res.status === 401) {
+        setVoiceState("off", "Session ended — reload");
+        voiceActive = false;
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      if (body.ok === false || body.error) {
+        setVoiceState("warn", body.error || body.reason || "Could not start mic");
+      } else {
+        setVoiceState("idle", "Listening — say shoot or retake");
+      }
+    } catch (e) {
+      setVoiceState("warn", "Voice bridge offline");
+    }
+    if (voiceTimer) clearInterval(voiceTimer);
+    pollVoice();
+    voiceTimer = setInterval(pollVoice, 400);
+  }
+
+  function stopVoice() {
+    voiceActive = false;
+    if (voiceTimer) {
+      clearInterval(voiceTimer);
+      voiceTimer = null;
+    }
+    setVoiceState("off", "Off — start webcam");
+    showHeard("");
+    fetch("/api/voice/stop", { method: "POST" }).catch(() => {});
+  }
+
+  async function pollVoice() {
+    if (!voiceActive || voiceBusy) return;
+    voiceBusy = true;
+    try {
+      const res = await fetch("/api/voice-command", {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (res.status === 401) {
+        setVoiceState("off", "Session ended — reload to sign in");
+        voiceActive = false;
+        return;
+      }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const body = await res.json();
+      if (body.error && !body.ok) {
+        setVoiceState("warn", body.error);
+        return;
+      }
+      if (body.heard && body.heard !== lastVoiceHeard) {
+        lastVoiceHeard = body.heard;
+        showHeard(body.heard);
+      }
+      if (body.command) {
+        const now = Date.now();
+        if (body.command === lastCommandName && now - lastCommandAt < 800) {
+          return;
+        }
+        lastCommandAt = now;
+        lastCommandName = body.command;
+        const acted =
+          body.command === "shoot" ? runShootCommand() : runRetakeCommand();
+        if (acted) {
+          setVoiceState(
+            "ok",
+            body.command === "shoot" ? "→ shoot + analyze" : "→ retake"
+          );
+        }
+        return;
+      }
+      if (body.state === "thinking" && !body.heard) {
+        setVoiceState("idle", "Hearing…");
+      } else if (body.state === "error") {
+        setVoiceState("warn", body.error || "Listener error");
+      } else if (body.reason && /cooling/i.test(body.reason)) {
+        setVoiceState("idle", "Cooling down…");
+      } else if (body.reason && /not a capture/i.test(body.reason)) {
+        setVoiceState("warn", "Heard, not a command");
+      } else if (body.running || body.state === "listening") {
+        setVoiceState("idle", "Listening — say shoot or retake");
+      } else {
+        setVoiceState("idle", body.reason || "Listening");
+      }
+    } catch (e) {
+      setVoiceState("warn", "Voice bridge offline");
+    } finally {
+      voiceBusy = false;
+    }
+  }
+
+  // Leaving the page releases the mic
+  window.addEventListener("pagehide", () => {
+    if (voiceActive) {
+      voiceActive = false;
+      if (voiceTimer) clearInterval(voiceTimer);
+      navigator.sendBeacon && navigator.sendBeacon("/api/voice/stop");
+    }
+  });
+
+  syncControls();
 })();
 </script>
 {% endblock %}

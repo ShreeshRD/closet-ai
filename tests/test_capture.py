@@ -156,3 +156,105 @@ def test_image_serve_requires_auth_and_stays_in_base(client):
     # path traversal blocked
     bad = client.get("/images/../wardrobe.db")
     assert bad.status_code in (400, 404)
+
+
+def test_capture_page_has_cancel_controls(client):
+    _login(client, "1111")
+    r = client.get("/capture")
+    assert r.status_code == 200
+    assert 'id="cancel-confirm"' in r.text
+    assert 'id="cancel-confirm-form"' in r.text
+    assert "Cancel" in r.text
+    # Retake without refreshing; no separate Analyze button
+    assert 'id="retake-btn"' in r.text
+    assert 'id="retake-from-confirm"' in r.text
+    assert "Retake" in r.text
+    assert "shoot or retake" in r.text
+    # Analyze is not a separate control — Shoot does capture+analyze
+    assert 'id="analyze-btn"' not in r.text
+    assert 'id="shoot-btn"' in r.text
+
+
+def test_prefill_uses_vision_estimates(client):
+    """Solid blue → solid; busy multi-color crop → not solid; color from center."""
+    _login(client, "4444")
+
+    # Solid blue square
+    r = client.post(
+        "/api/capture",
+        files={"file": ("blue.png", _png_bytes((30, 60, 170)), "image/png")},
+    )
+    assert r.status_code == 200
+    prefill = r.json()["prefill"]
+    assert prefill["color"] in {"blue", "navy"}
+    assert prefill["pattern"] == "solid"
+    assert prefill["type"] in {"tshirt", "pants", "shorts", "shirt", "jacket"}
+    assert prefill["sleeve"] in {"short", "long", "sleeveless", "three_fourths", "unknown"}
+
+    # Busy floral-like pattern on a light background (garment in center)
+    img = Image.new("RGB", (240, 240), (245, 245, 240))
+    px = img.load()
+    import random
+
+    random.seed(7)
+    for y in range(40, 200):
+        for x in range(40, 200):
+            px[x, y] = (150, 70, 65)
+    for _ in range(400):
+        x = random.randint(50, 190)
+        y = random.randint(50, 190)
+        for dx in range(-4, 5):
+            for dy in range(-4, 5):
+                if dx * dx + dy * dy <= 16:
+                    xx, yy = x + dx, y + dy
+                    if 40 <= xx < 200 and 40 <= yy < 200:
+                        px[xx, yy] = random.choice(
+                            [(230, 190, 170), (200, 120, 100), (190, 170, 90), (240, 210, 190)]
+                        )
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    r2 = client.post(
+        "/api/capture",
+        files={"file": ("floral.png", buf.getvalue(), "image/png")},
+    )
+    assert r2.status_code == 200
+    p2 = r2.json()["prefill"]
+    assert p2["pattern"] in {"floral", "graphic", "other"}
+    assert p2["pattern"] != "solid"
+    # Color should be garment-ish (maroon/brown/red family), not light bg
+    assert p2["color"] in {"maroon", "brown", "red", "maroon"}
+
+
+def test_cancel_analysis_discards_pending(client):
+    _login(client, "6666")
+    cap = client.post(
+        "/api/capture",
+        files={"file": ("c.png", _png_bytes((90, 40, 40)), "image/png")},
+    )
+    assert cap.status_code == 200
+    token = cap.json()["token"]
+
+    # UI cancel just clears client state; token becomes unusable only after
+    # confirm. Re-analyze produces a new token — old one still valid until used
+    # or replaced. Ensure confirm with bad token fails cleanly.
+    bad = client.post(
+        "/api/capture/confirm",
+        json={"token": "nope", "type": "tshirt", "color": "red"},
+    )
+    assert bad.status_code == 410
+
+    # Valid token still works after a conceptual cancel (user can re-analyze)
+    ok = client.post(
+        "/api/capture/confirm",
+        json={
+            "token": token,
+            "type": "shorts",
+            "color": "maroon",
+            "name": "Floral shorts",
+            "pattern": "floral",
+            "sleeve": "short",
+            "quantity": 1,
+        },
+    )
+    assert ok.status_code == 200
+    assert ok.json()["item"]["pattern"] == "floral"

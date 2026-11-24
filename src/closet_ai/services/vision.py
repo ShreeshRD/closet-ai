@@ -35,6 +35,7 @@ _NAMED_COLORS: list[tuple[str, tuple[int, int, int]]] = [
     ("brown", (110, 75, 40)),
     ("beige", (210, 195, 160)),
     ("tan", (195, 165, 120)),
+    ("maroon", (120, 40, 50)),
 ]
 
 
@@ -55,9 +56,8 @@ def save_jpeg(img: Image.Image, dest: Path, quality: int = 88) -> str:
 
 
 def _background_mask(img: Image.Image) -> np.ndarray:
-    """True for pixels likely background (near white / very light edges)."""
+    """True for pixels likely garment (not near-white / not border background)."""
     arr = np.asarray(img, dtype=np.float32)
-    # Sample border for background estimate
     h, w, _ = arr.shape
     border = np.concatenate(
         [
@@ -69,38 +69,61 @@ def _background_mask(img: Image.Image) -> np.ndarray:
         axis=0,
     )
     bg = np.median(border, axis=0)
-    # Also treat near-white as bg
     dist = np.linalg.norm(arr - bg, axis=-1)
     near_white = (arr.min(axis=-1) > 230) & (arr.max(axis=-1) > 245)
-    return (dist > 40) & ~near_white
+    # Strong border color = walls/doors/tables behind the garment
+    near_border_bg = dist < 45
+    mask = ~(near_white | near_border_bg)
+    # Prefer a solid center block when the subject is held up mid-frame
+    cy, cx = h // 2, w // 2
+    ry, rx = max(h // 4, 1), max(w // 4, 1)
+    center = np.zeros((h, w), dtype=bool)
+    center[cy - ry : cy + ry, cx - rx : cx + rx] = True
+    if mask[center].sum() >= 200:
+        # Dilate center a bit so edges of the garment still count
+        grown = center.copy()
+        grown[max(cy - ry - h // 10, 0) : cy + ry + h // 10, max(cx - rx - w // 10, 0) : cx + rx + w // 10] = True
+        if mask[grown].sum() >= 200:
+            return mask & grown
+    if mask.sum() < 50:
+        return np.ones((h, w), dtype=bool)
+    return mask
 
 
 def dominant_rgb(img: Image.Image) -> tuple[int, int, int]:
     arr = np.asarray(img, dtype=np.float32)
     mask = _background_mask(img)
     if mask.sum() < 50:
-        # Fallback: overall mean
         mean = arr.reshape(-1, 3).mean(axis=0)
         return tuple(int(x) for x in mean)  # type: ignore[return-value]
     pixels = arr[mask]
-    # k-means-lite: quantize to 8 levels and take mode-ish center
+    # Quantize and take the densest cluster near the foreground mean
     q = (pixels // 32).astype(np.int32)
     keys = q[:, 0] * 64 + q[:, 1] * 8 + q[:, 2]
     vals, counts = np.unique(keys, return_counts=True)
-    top = vals[np.argsort(counts)[-3:]]
-    centers = []
-    for k in top:
-        sel = keys == k
-        centers.append(pixels[sel].mean(axis=0))
-    stacked = np.stack(centers, axis=0)
-    # Pick the cluster closest to overall mean of foreground (stable)
+    # Weight by count but stay near overall garment color (reject tiny outliers)
     fg_mean = pixels.mean(axis=0)
-    idx = int(np.argmin(np.linalg.norm(stacked - fg_mean, axis=-1)))
-    rgb = stacked[idx]
+    best_score = -1.0
+    best_rgb = fg_mean
+    for k, c in zip(vals, counts):
+        if c < max(20, len(pixels) * 0.02):
+            continue
+        sel = keys == k
+        center = pixels[sel].mean(axis=0)
+        # Prefer dense clusters that are not extreme outliers
+        dist = float(np.linalg.norm(center - fg_mean))
+        if dist > 90:
+            continue
+        score = c / (1.0 + dist)
+        if score > best_score:
+            best_score = score
+            best_rgb = center
+    rgb = best_rgb
     return tuple(int(np.clip(c, 0, 255)) for c in rgb)  # type: ignore[return-value]
 
 
 def color_name(rgb: tuple[int, int, int]) -> str:
+    r, g, b = (int(x) for x in rgb)
     best = "grey"
     best_d = float("inf")
     for name, ref in _NAMED_COLORS:
@@ -110,7 +133,103 @@ def color_name(rgb: tuple[int, int, int]) -> str:
         if d < best_d:
             best_d = d
             best = name
+    # Maroon / dark red-brown garments: nearest-neighbor can land on grey
+    # when saturation is moderate but hue is clearly red-brown.
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx - mn > 25 and r >= g and r >= b and g < b + 30 and r > 70:
+        if best in ("grey", "brown", "tan", "beige", "black") and r > g + 15 and r > b + 10:
+            # dark red-leaning → maroon when brightness is low-ish
+            if (r + g + b) / 3 < 150 and r > b:
+                return "maroon"
     return best
+
+
+def estimate_pattern(img: Image.Image) -> str:
+    """Coarse pattern guess from center-crop texture. Human still confirms."""
+    arr = np.asarray(img, dtype=np.float32)
+    h, w, _ = arr.shape
+    # Center crop — garment held up is usually mid-frame
+    y0, y1 = int(h * 0.25), int(h * 0.75)
+    x0, x1 = int(w * 0.25), int(w * 0.75)
+    crop = arr[y0:y1, x0:x1]
+    if crop.size == 0:
+        return "solid"
+    # Luma
+    luma = 0.299 * crop[..., 0] + 0.587 * crop[..., 1] + 0.114 * crop[..., 2]
+    # High-frequency energy: difference from 8x downsampled smooth version
+    small = np.asarray(
+        Image.fromarray(luma.astype(np.uint8)).resize(
+            (max(luma.shape[1] // 8, 1), max(luma.shape[0] // 8, 1)),
+            Image.Resampling.BILINEAR,
+        ),
+        dtype=np.float32,
+    )
+    smooth = np.asarray(
+        Image.fromarray(small.astype(np.uint8)).resize(
+            (luma.shape[1], luma.shape[0]), Image.Resampling.BILINEAR
+        ),
+        dtype=np.float32,
+    )
+    residual = luma - smooth
+    detail = float(np.std(residual))
+    # Color variation across the crop (florals often multi-hue)
+    color_std = float(np.mean(np.std(crop.reshape(-1, 3), axis=0)))
+
+    # Structural: column/row mean profiles for stripes
+    col_means = luma.mean(axis=0)
+    row_means = luma.mean(axis=1)
+    # Autocorrelation-like peak: std of profile after light smoothing
+    def _profile_score(profile: np.ndarray) -> float:
+        if profile.size < 8:
+            return 0.0
+        k = max(3, profile.size // 20)
+        kernel = np.ones(k) / k
+        sm = np.convolve(profile, kernel, mode="same")
+        return float(np.std(sm - np.mean(sm)))
+
+    col_osc = _profile_score(col_means)
+    row_osc = _profile_score(row_means)
+
+    if detail < 4.0 and color_std < 18:
+        return "solid"
+    # Strong periodic row/column variation → stripes
+    if col_osc > 12 and row_osc < 6 and detail > 6:
+        return "striped"
+    if row_osc > 12 and col_osc < 6 and detail > 6:
+        return "striped"
+    # Busy multi-color texture → floral / graphic / plaid-ish
+    if detail > 14 and color_std > 28:
+        # High color variety with soft blobs tends floral; hard edges plaid
+        if color_std > 40 and detail > 18:
+            return "floral"
+        return "graphic"
+    if detail > 10:
+        return "graphic"
+    if detail > 6:
+        return "other"
+    return "solid"
+
+
+def estimate_shape(img: Image.Image) -> dict[str, str]:
+    """Very light aspect/shape hints for type + sleeve prefill."""
+    w, h = img.size
+    # Portrait-ish tall garment often pants/shorts held up; wide often tops
+    aspect = h / max(w, 1)  # >1 taller than wide
+    # Default conservative guesses — human confirms before save
+    type_guess = "tshirt"
+    sleeve_guess = "short"
+    if aspect >= 1.35:
+        # Tall narrow: more like pants / trackpants / long shirt
+        type_guess = "pants"
+        sleeve_guess = "long"
+    elif aspect <= 0.75:
+        # Wide short: shorts / folded top
+        type_guess = "shorts"
+        sleeve_guess = "short"
+    else:
+        type_guess = "tshirt"
+        sleeve_guess = "short"
+    return {"type": type_guess, "sleeve": sleeve_guess}
 
 
 def _hist(img: Image.Image) -> np.ndarray:
@@ -159,12 +278,16 @@ def analyze(data: bytes) -> dict[str, Any]:
     img = load_image(data)
     rgb = dominant_rgb(img)
     name = color_name(rgb)
-    # Aspect hint only — sleeve/pattern still human-confirmed
+    pattern = estimate_pattern(img)
+    shape = estimate_shape(img)
     w, h = img.size
     return {
         "embedding": embedding(img),
         "color_rgb": rgb,
         "color": name,
+        "pattern": pattern,
+        "type": shape["type"],
+        "sleeve": shape["sleeve"],
         "width": w,
         "height": h,
         "image": img,

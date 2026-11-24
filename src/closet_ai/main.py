@@ -18,14 +18,27 @@ from closet_ai.config import (
     static_dir,
 )
 from closet_ai.db import init_db
-from closet_ai.routes import auth_routes, capture, items
+from closet_ai.routes import auth_routes, capture, items, log, settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_dirs()
     init_db()
+    # Phase 2: daily SQLite backup on startup (idempotent per UTC day)
+    try:
+        from closet_ai.services.logging import backup_db
+
+        backup_db()
+    except Exception:
+        pass
     yield
+    from closet_ai.services import voice
+
+    try:
+        voice.stop_listening()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="Closet AI", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -33,6 +46,8 @@ app.mount("/static", StaticFiles(directory=str(static_dir())), name="static")
 app.include_router(auth_routes.router)
 app.include_router(items.router)
 app.include_router(capture.router)
+app.include_router(log.router)
+app.include_router(settings.router)
 
 
 @app.middleware("http")
@@ -55,7 +70,14 @@ async def healthz():
 
 
 def run() -> None:
+    import logging
     import uvicorn
+
+    # Surface voice ASR transcripts in /tmp/closet-ai.log for debugging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
 
     ensure_dirs()
     init_db()

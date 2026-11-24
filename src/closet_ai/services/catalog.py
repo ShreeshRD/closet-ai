@@ -5,7 +5,7 @@ import sqlite3
 from typing import Any
 
 from closet_ai.db import ITEM_TYPES, PATTERNS, SLEEVES, display_name, get_db, utcnow
-from closet_ai.services.wash_rules import evaluate_due
+from closet_ai.services.wash_rules import DEFAULT_THRESHOLDS, evaluate_due
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -143,13 +143,21 @@ def refresh_item_state(conn: sqlite3.Connection, item_id: int) -> str | None:
         ).fetchall()
     avg_dirt = (sum(r["dirt"] for r in rows) / len(rows)) if rows else None
 
+    # Per-type threshold overrides from settings (Phase 3); fall back to defaults
+    from closet_ai.services import app_settings
+
+    thr = app_settings.effective_thresholds(conn).get(
+        item["type"], DEFAULT_THRESHOLDS.get(item["type"], (10, "medium", 60))
+    )
     due, reason = evaluate_due(
         item_type=item["type"],
         wears_since_wash=item["wears_since_wash"],
         latest_dirt=last_rating["dirt"] if last_rating else None,
         avg_dirt=avg_dirt,
+        rating_count=len(rows),
         last_washed_at=last_washed_at,
         created_at=item["created_at"],
+        thresholds=thr,
     )
     new_state = "due" if due else "available"
     if new_state != item["state"]:

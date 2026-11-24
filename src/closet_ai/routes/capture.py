@@ -12,7 +12,7 @@ from PIL import Image
 from closet_ai.auth import require_session
 from closet_ai.config import images_dir, templates_dir
 from closet_ai.db import ITEM_TYPES, PATTERNS, SLEEVES, get_db
-from closet_ai.services import catalog, identity, vision
+from closet_ai.services import catalog, identity, vision, voice
 
 router = APIRouter(tags=["capture"])
 templates = Jinja2Templates(directory=str(templates_dir()))
@@ -37,6 +37,33 @@ def _remember(token: str, payload: dict[str, Any]) -> None:
 async def capture_page(request: Request):
     require_session(request)
     return templates.TemplateResponse(request, "capture.html", _ctx(request))
+
+
+@router.get("/api/voice-command")
+async def voice_command_endpoint(request: Request):
+    """Pop the next continuous-listener event (command or heard text)."""
+    require_session(request)
+    return voice.pop_command()
+
+
+@router.post("/api/voice/listen")
+async def voice_listen_start(request: Request):
+    """Start hands-free mic listening (webcam on)."""
+    require_session(request)
+    return voice.start_listening()
+
+
+@router.post("/api/voice/stop")
+async def voice_listen_stop(request: Request):
+    """Stop hands-free mic listening (webcam off / leave page)."""
+    require_session(request)
+    return voice.stop_listening()
+
+
+@router.get("/api/voice/status")
+async def voice_listen_status(request: Request):
+    require_session(request)
+    return voice.listening_status()
 
 
 @router.post("/api/capture")
@@ -73,9 +100,9 @@ async def capture_upload(request: Request, file: UploadFile = File(...)):
         "prefill": {
             "color": analysis["color"],
             "color_rgb": list(analysis["color_rgb"]),
-            "type": "tshirt",
-            "pattern": "solid",
-            "sleeve": "short",
+            "type": analysis.get("type") or "tshirt",
+            "pattern": analysis.get("pattern") or "solid",
+            "sleeve": analysis.get("sleeve") or "short",
             "quantity": 1,
             "name": "",
         },

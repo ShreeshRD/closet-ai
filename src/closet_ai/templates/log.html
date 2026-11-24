@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Log undress · Closet AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="row-between">
+    <h1>Log undress</h1>
+    <div class="actions">
+      <a class="btn ghost" href="/due">Wash list</a>
+      <a class="btn ghost" href="/">← Wardrobe</a>
+    </div>
+  </div>
+  <p class="muted">Tap tiles to select what you took off, then rate dirt 1–5. Each selection = +1 wear on that item (pools count once, not ×qty).</p>
+</section>
+
+{% if backlog %}
+<section class="card compact" id="backlog-card">
+  <div class="row-between">
+    <h2>Rate what you took off?</h2>
+    <button type="button" class="btn ghost" id="backlog-skip">Skip</button>
+  </div>
+  <p class="muted small">Earlier wears without a dirt rating.</p>
+  <ul class="chip-list" id="backlog-list">
+    {% for b in backlog %}
+    <li>
+      <button type="button" class="chip" data-backlog-id="{{ b.id }}" data-name="{{ b.display_name }}">
+        <span class="swatch" data-color="{{ b.color }}"></span>
+        <span class="chip-name">{{ b.display_name }}</span>
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <form method="get" action="/log" class="log-search row-between">
+    <label class="sr-only" for="q">Search</label>
+    <input id="q" name="q" type="search" placeholder="Search available items…" value="{{ q }}" />
+    <button type="submit" class="btn ghost">Search</button>
+  </form>
+
+  {% if not items %}
+    <p class="muted empty-tiles">
+      {% if q %}No matches for “{{ q }}”.{% else %}No available items right now — check the wash list.{% endif %}
+      <a href="/">Back to wardrobe</a> · <a href="/due">Wash list</a>
+    </p>
+  {% else %}
+  <p class="muted small" style="margin:0 0 0.5rem">
+    Dimmed tiles were worn in the last 12h — still tappable to re-rate.
+  </p>
+  <div class="tile-grid log-tiles" id="log-tiles">
+    {% for item in items %}
+    {% include "_log_tile.html" %}
+    {% endfor %}
+  </div>
+  <div class="row-between log-actions">
+    <p class="muted small" id="log-hint">Select tiles, then rate &amp; save.</p>
+    <button type="button" class="btn primary-block" id="log-save" disabled>Save undress</button>
+  </div>
+  {% endif %}
+  <p class="error" id="log-error" hidden></p>
+  <p class="ok-banner" id="log-flash" hidden></p>
+</section>
+
+<!-- Rating popup for selected items -->
+<div class="overlay" id="rate-overlay" hidden>
+  <div class="panel rate-panel" role="dialog" aria-modal="true" aria-labelledby="rate-title" tabindex="-1" id="rate-panel">
+    <button type="button" class="panel-close" id="rate-close" aria-label="Close">×</button>
+    <h2 id="rate-title">Dirt rating</h2>
+    <p class="muted small" id="rate-sub">How dirty is each item?</p>
+    <ul class="rate-list" id="rate-list"></ul>
+    <div class="row-between confirm-alt">
+      <button type="button" class="btn ghost" id="rate-cancel">Cancel</button>
+      <button type="button" class="btn primary-block" id="rate-save" style="flex:1;margin-top:0">Save undress</button>
+    </div>
+    <p class="error" id="rate-error" hidden></p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const errEl = document.getElementById("log-error");
+  const flash = document.getElementById("log-flash");
+  const overlay = document.getElementById("rate-overlay");
+  const panel = document.getElementById("rate-panel");
+  const rateList = document.getElementById("rate-list");
+  const rateSave = document.getElementById("rate-save");
+  const selected = new Map(); // id -> {name, dirt, qty, group}
+  const readyBtn = document.getElementById("log-save");
+
+  function syncSave() {
+    if (readyBtn) {
+      readyBtn.disabled = selected.size === 0;
+      readyBtn.textContent = selected.size
+        ? "Rate & save (" + selected.size + ")"
+        : "Save undress";
+    }
+  }
+
+  function toggleTile(tile, force) {
+    const id = tile.getAttribute("data-item-id");
+    const name = tile.getAttribute("data-name") || id;
+    const group = tile.getAttribute("data-group") || "ready";
+    const on = force !== undefined ? force : !selected.has(id);
+    if (on) {
+      if (!selected.has(id)) {
+        const qty = Number(tile.getAttribute("data-qty") || 1);
+        const recent = tile.getAttribute("data-recent") === "1";
+        selected.set(id, { name, dirt: 3, qty, recent, group: "ready" });
+      }
+      tile.classList.add("tile-selected");
+      tile.setAttribute("aria-pressed", "true");
+      const check = tile.querySelector(".tile-check");
+      if (check) check.hidden = false;
+    } else {
+      selected.delete(id);
+      tile.classList.remove("tile-selected");
+      tile.setAttribute("aria-pressed", "false");
+      const check = tile.querySelector(".tile-check");
+      if (check) check.hidden = true;
+    }
+    syncSave();
+  }
+
+  function onGridClick(e) {
+    const tile = e.target.closest(".log-tile");
+    if (!tile) return;
+    e.preventDefault();
+    toggleTile(tile);
+  }
+
+  document.getElementById("log-tiles")?.addEventListener("click", onGridClick);
+
+  function openRatePopup() {
+    if (!selected.size) return;
+    rateList.innerHTML = "";
+    selected.forEach((val, id) => {
+      const li = document.createElement("li");
+      li.className = "rate-row";
+      li.dataset.itemId = id;
+      li.innerHTML =
+        '<span class="rate-name"></span>' +
+        '<span class="rate-meta muted small"></span>' +
+        '<span class="dirt-picker" role="radiogroup"></span>';
+      li.querySelector(".rate-name").textContent = val.name;
+      const meta = li.querySelector(".rate-meta");
+      const bits = [];
+      if (val.qty > 1) bits.push("pool ×" + val.qty);
+      bits.push("1 wear");
+      if (val.recent) bits.push("recent");
+      meta.textContent = bits.join(" · ");
+      const picker = li.querySelector(".dirt-picker");
+      for (let d = 1; d <= 5; d++) {
+        const label = document.createElement("label");
+        label.className = "dirt-opt" + (d === val.dirt ? " active" : "");
+        label.title = "Dirt " + d;
+        label.innerHTML = "<span>" + d + "</span>";
+        label.addEventListener("click", () => {
+          val.dirt = d;
+          picker.querySelectorAll(".dirt-opt").forEach((el, i) => {
+            el.classList.toggle("active", i + 1 === d);
+          });
+        });
+        picker.appendChild(label);
+      }
+      rateList.appendChild(li);
+    });
+    document.getElementById("rate-error").hidden = true;
+    rateSave.disabled = false;
+    rateSave.textContent = "Save undress";
+    overlay.hidden = false;
+    panel.focus();
+  }
+
+  function closeRate() {
+    overlay.hidden = true;
+  }
+
+  readyBtn?.addEventListener("click", openRatePopup);
+  document.getElementById("rate-close")?.addEventListener("click", closeRate);
+  document.getElementById("rate-cancel")?.addEventListener("click", closeRate);
+  overlay?.addEventListener("click", (e) => {
+    if (e.target === overlay) closeRate();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay && !overlay.hidden) closeRate();
+  });
+
+  rateSave?.addEventListener("click", async () => {
+    const err = document.getElementById("rate-error");
+    err.hidden = true;
+    if (!selected.size) return;
+    const ratings = {};
+    selected.forEach((val, id) => {
+      ratings[id] = val.dirt;
+    });
+    rateSave.disabled = true;
+    rateSave.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/log/undress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ratings }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || res.statusText);
+      const dueNow = (body.results || []).filter((r) => r.state === "due");
+      const names = (body.results || []).map((r) => r.display_name);
+      closeRate();
+      flash.hidden = false;
+      if (dueNow.length) {
+        flash.textContent =
+          "Saved · " +
+          names.join(", ") +
+          " — wash list (dirt ≥ 4 or enough wears)";
+        flash.className = "banner due-banner";
+      } else {
+        flash.textContent = "Saved · " + names.join(", ");
+        flash.className = "banner ok-banner";
+      }
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      err.hidden = false;
+      err.textContent = e.message || "Save failed";
+      rateSave.disabled = false;
+      rateSave.textContent = "Save undress";
+    }
+  });
+
+  document.getElementById("backlog-skip")?.addEventListener("click", () => {
+    document.getElementById("backlog-card")?.setAttribute("hidden", "");
+  });
+
+  document.querySelectorAll("[data-backlog-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-backlog-id");
+      const tile = document.querySelector(
+        '.log-tile[data-item-id="' + id + '"]'
+      );
+      if (tile) {
+        toggleTile(tile, true);
+        tile.scrollIntoView({ behavior: "smooth", block: "center" });
+        openRatePopup();
+      } else {
+        const q = document.getElementById("q");
+        if (q) {
+          q.value = btn.getAttribute("data-name") || "";
+          q.form?.submit();
+        }
+      }
+    });
+  });
+
+  syncSave();
+})();
+</script>
+{% endblock %}

@@ -190,6 +190,75 @@ def _rebuild_items_for_types(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _repair_child_fks(conn: sqlite3.Connection) -> None:
+    """Repoint child FKs at `items` if they still reference a dropped `items_old`.
+
+    Older migrations renamed `items` → `items_old` and left child tables
+    pointing at the old name; inserts then fail with "no such table: items_old".
+    """
+    children = ("ratings", "wear_events", "wash_events", "item_photos")
+    needs = False
+    for name in children:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        if row and row["sql"] and "items_old" in row["sql"]:
+            needs = True
+            break
+    if not needs:
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for name in children:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
+            ).fetchone()
+            if not row or not row["sql"] or "items_old" not in row["sql"]:
+                continue
+            sql = row["sql"].replace("items_old", "items")
+            # CREATE TABLE IF NOT EXISTS name … → rebuild via temp rename
+            conn.execute(f"DROP TABLE IF EXISTS {name}_new")
+            # sqlite_master sql may lack IF NOT EXISTS; force create new
+            create_sql = sql.replace(
+                f"CREATE TABLE {name}", f"CREATE TABLE {name}_new", 1
+            ).replace(
+                f'CREATE TABLE "{name}"', f'CREATE TABLE "{name}_new"', 1
+            )
+            if f"CREATE TABLE {name}_new" not in create_sql and f'CREATE TABLE "{name}_new"' not in create_sql:
+                # fallback: insert IF NOT EXISTS after CREATE TABLE
+                create_sql = sql.replace(
+                    "CREATE TABLE", "CREATE TABLE", 1
+                )
+                # last resort: rewrite name
+                import re as _re
+
+                create_sql = _re.sub(
+                    rf'CREATE TABLE\s+"?{name}"?',
+                    f"CREATE TABLE {name}_new",
+                    sql,
+                    count=1,
+                    flags=_re.I,
+                )
+            conn.execute(create_sql)
+            conn.execute(
+                f"INSERT INTO {name}_new SELECT * FROM {name}"
+            )
+            conn.execute(f"DROP TABLE {name}")
+            conn.execute(f"ALTER TABLE {name}_new RENAME TO {name}")
+        # Rebuild indexes that belonged to children
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_ratings_item ON ratings(item_id, rated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_wear_events_item ON wear_events(item_id, event_at)",
+        ):
+            conn.execute(idx_sql)
+        conn.execute("PRAGMA foreign_key_check")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db() -> None:
     ensure_dirs()
     with connect() as conn:
@@ -199,9 +268,10 @@ def init_db() -> None:
             if not _type_supported(conn, t):
                 _rebuild_items_for_types(conn)
                 break
+        _repair_child_fks(conn)
         conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('schema_version', '2') "
-            "ON CONFLICT(key) DO UPDATE SET value = '2'"
+            "INSERT INTO settings (key, value) VALUES ('schema_version', '3') "
+            "ON CONFLICT(key) DO UPDATE SET value = '3'"
         )
 
 

@@ -5,7 +5,8 @@
   <div class="row-between">
     <h1>Wardrobe</h1>
     <div class="actions">
-      <a class="btn" href="/capture">Capture</a>
+      <a class="btn" href="/log">Log</a>
+      <a class="btn ghost" href="/capture">Capture</a>
       <a class="btn ghost" href="/items/new">+ Manual</a>
     </div>
   </div>
@@ -20,14 +21,24 @@
 <section class="card compact wash-strip">
   <div class="row-between">
     <h2>Wash list</h2>
-    <span class="tag due-tag">{{ due|length }}</span>
+    <div class="actions">
+      <a class="btn ghost" href="/due">Open</a>
+      <form method="post" action="/due/wash" class="inline">
+        {% for d in due %}<input type="hidden" name="item_ids" value="{{ d.id }}" />{% endfor %}
+        <button type="submit" class="btn">Mark all washed</button>
+      </form>
+    </div>
   </div>
   <ul class="chip-list">
     {% for d in due %}
-    <li><button type="button" class="chip due-chip" data-open-item="{{ d.id }}">
-      <span class="swatch" data-color="{{ d.color }}"></span>
-      <span class="chip-name">{{ d.display_name }}</span>
-    </button></li>
+    <li>
+      <form method="post" action="/due/wash/{{ d.id }}" class="inline">
+        <button type="submit" class="chip due-chip" title="Mark washed">
+          <span class="swatch" data-color="{{ d.color }}"></span>
+          <span class="chip-name">{{ d.display_name }}</span>
+        </button>
+      </form>
+    </li>
     {% endfor %}
   </ul>
 </section>
